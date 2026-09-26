@@ -12,7 +12,6 @@ import type {
   ProviderSettingsFormModel,
 } from "@/lib/providerSettingsFormTypes.js";
 import type { ModelConnectivityResult } from "@zcode/shared";
-import type { ProviderApiType } from "@zcode/provider";
 import {
   TID_MODEL_PROVIDER_ADD_MODEL_BUTTON,
   TID_MODEL_PROVIDER_BASE_URL_INPUT,
@@ -22,7 +21,7 @@ import {
   TID_MODEL_PROVIDER_NAME_INPUT,
   testId,
 } from "@zcode/shared";
-import { InfoIcon, LockKeyholeIcon, Plus, Pencil, Trash2, MoreHorizontal } from "lucide-react";
+import { InfoIcon, ListPlusIcon, LockKeyholeIcon, Plus, Pencil, Trash2, MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { Input } from "@/components/ui/input.js";
 import {
@@ -47,7 +46,9 @@ import {
 import { SortableProviderModelList } from "@/settings/model-provider-section/SortableProviderModelList.js";
 import { useProviderModelDraft } from "@/settings/model-provider-section/useProviderModelDraft.js";
 import { ProviderLogo } from "@/settings/model-provider-section/ProviderLogo.js";
-import type { ProviderConfigObject } from "@zcode/provider";
+import type { ProviderApiType, ProviderConfigObject } from "@zcode/provider";
+import { useModelsDevMetadataMatch } from "@/settings/model-provider-section/useModelsDevMetadataMatch.js";
+import { ProviderModelsDiscoveryDialog } from "@/settings/model-provider-section/ProviderModelsDiscoveryDialog.js";
 
 export { formatModelContextWindowLabel } from "@/lib/tokenNumberFormat.js";
 export {
@@ -348,6 +349,9 @@ export function ProviderModelsSection({
   providerName,
   providerEnabled = true,
   providerAccess,
+  providerApiBaseUrl,
+  providerApiType,
+  providerApiKey,
   models,
   onTestModel,
   onModelCommit,
@@ -361,6 +365,12 @@ export function ProviderModelsSection({
   providerName?: string;
   providerEnabled?: boolean;
   providerAccess?: ProviderConfigObject["access"];
+  /** Provider 当前生效的 Base URL；用于 models.dev base-url 匹配与上游发现端点。 */
+  providerApiBaseUrl?: string;
+  /** Provider 的 API 格式；上游发现按其拼装 /models 路径与鉴权头。 */
+  providerApiType?: ProviderApiType;
+  /** 已保存的 API Key（ApiKey Access）；仅用于本次发现请求，不落盘。 */
+  providerApiKey?: string;
   models: ProviderSettingsFormModel[];
   onTestModel?: (model: string) => Promise<ModelConnectivityResult>;
   onModelCommit: (
@@ -381,6 +391,7 @@ export function ProviderModelsSection({
   const addSavingRef = useRef(false);
   const [addCommitError, setAddCommitError] = useState<string | null>(null);
   const [addModel] = useState(createEmptyModel);
+  const [discoveryOpen, setDiscoveryOpen] = useState(false);
   const [addDraftErrorField, setAddDraftErrorField] = useState<
     | "id"
     | "contextWindow"
@@ -401,6 +412,35 @@ export function ProviderModelsSection({
     resolve: resolveAddModelConfig,
   });
   const { draft: addDraft } = editor;
+  const modelsDev = useModelsDevMetadataMatch({
+    open: addDialogOpen,
+    modelId: addDraft.idValue,
+    providerId,
+    baseUrl: providerApiBaseUrl,
+    providerSettingsService,
+  });
+  const applyModelsDevMetadata = useCallback(() => {
+    const preset = modelsDev.metadata?.preset;
+    if (!preset) return;
+    const patch: Partial<ProviderModelDraftValues> = {};
+    if (preset.contextWindow !== undefined && preset.contextWindow !== null) {
+      patch.contextWindowValue = String(preset.contextWindow);
+    }
+    if (preset.maxTokens !== undefined && preset.maxTokens !== null) {
+      patch.maxOutputTokensValue = String(preset.maxTokens);
+    }
+    if (preset.input !== undefined && preset.input !== null) {
+      patch.inputFormatValue = {
+        supportsText: true,
+        supportsImage: preset.input.includes("image"),
+        supportsVideo: false,
+        supportsAudio: false,
+        supportsPdf: false,
+      };
+    }
+    if (Object.keys(patch).length === 0) return;
+    editor.change(patch);
+  }, [modelsDev.metadata, editor]);
 
   const openAddDialog = useCallback(() => {
     editor.reset(createEmptyModel());
@@ -458,6 +498,22 @@ export function ProviderModelsSection({
       setAddSaving(false);
     }
   }, [editor, onAddModel]);
+  const handleAddDiscoveredModels = useCallback(
+    async (modelIds: readonly string[]) => {
+      // 逐条复用 addPersonalModel 唯一写边界；上游 ID 只是候选事实，配置由智能配置解析。
+      for (const modelId of modelIds) {
+        const trimmed = modelId.trim();
+        if (!trimmed) continue;
+        await onAddModel({
+          ...createEmptyModel(),
+          modelId: trimmed,
+          personalConfig: {},
+          useRecommendedConfig: true,
+        });
+      }
+    },
+    [onAddModel],
+  );
   const addDraftErrorMessage = addDraftErrorField
     ? intl.formatMessage({
         id: `settings.modelProvider.modelMetadata.invalid.${addDraftErrorField}`,
@@ -470,17 +526,31 @@ export function ProviderModelsSection({
         <span className="text-ui-base text-foreground-subtle">
           {intl.formatMessage({ id: "settings.modelProvider.models" })}
         </span>
-        <Button
-          type="button"
-          variant="secondary"
-          size="default"
-          className="rounded-lg"
-          data-testid={TID_MODEL_PROVIDER_ADD_MODEL_BUTTON}
-          onClick={openAddDialog}
-        >
-          <Plus data-icon="inline-start" aria-hidden="true" />
-          {intl.formatMessage({ id: "settings.modelProvider.addModel" })}
-        </Button>
+        <div className="flex items-center gap-2">
+          {providerApiBaseUrl?.trim() ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="default"
+              className="rounded-lg"
+              onClick={() => setDiscoveryOpen(true)}
+            >
+              <ListPlusIcon data-icon="inline-start" aria-hidden="true" />
+              {intl.formatMessage({ id: "settings.modelProvider.discover.button" })}
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            variant="secondary"
+            size="default"
+            className="rounded-lg"
+            data-testid={TID_MODEL_PROVIDER_ADD_MODEL_BUTTON}
+            onClick={openAddDialog}
+          >
+            <Plus data-icon="inline-start" aria-hidden="true" />
+            {intl.formatMessage({ id: "settings.modelProvider.addModel" })}
+          </Button>
+        </div>
       </div>
       {models.length > 0 ? (
         <div className="overflow-hidden rounded-lg border border-input-border bg-input">
@@ -575,6 +645,19 @@ export function ProviderModelsSection({
           onModelIdBlur={() => {
             void editor.flush().catch(() => undefined);
           }}
+          modelsDevMetadata={modelsDev.metadata}
+          modelsDevFetching={modelsDev.fetching}
+          onModelsDevApply={modelsDev.metadata ? applyModelsDevMetadata : undefined}
+        />
+        <ProviderModelsDiscoveryDialog
+          open={discoveryOpen}
+          baseUrl={providerApiBaseUrl}
+          apiType={providerApiType}
+          apiKey={providerApiKey}
+          existingModelIds={models.map((model) => model.modelId)}
+          providerSettingsService={providerSettingsService}
+          onOpenChange={setDiscoveryOpen}
+          onAddModels={handleAddDiscoveredModels}
         />
       </>
     </div>

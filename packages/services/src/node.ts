@@ -6,8 +6,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   createNodeProviderRuntimePathEnv,
+  ModelsDevCatalogSource,
   NodeModelSelectionConfigRepository,
   PERSONAL_PROVIDER_CONFIG_FILE_NAME,
+  ProviderModelsDiscovery,
 } from "@zcode/provider-node";
 import { getAppConfigDir as resolveAppConfigDir } from "./paths.js";
 import {
@@ -1516,6 +1518,14 @@ export function createLocalServices(options: {
   );
   const providerConfigLog = createServiceLogger("provider-config");
   const clientConfigPlatform = resolveClientConfigPlatform();
+  // models.dev 公共目录与上游模型发现：注入既有 ApiClient 装配，
+  // URL、预算与校验由 provider-node 边界唯一实现。
+  const modelsDevCatalogSource = new ModelsDevCatalogSource({
+    request: (url, init) => apiClient.request(url, init),
+  });
+  const providerModelsDiscovery = new ProviderModelsDiscovery({
+    request: (url, init) => apiClient.request(url, init),
+  });
   const providerConfigRuntime = createProviderConfigRuntime({
     zcodeBuiltinFilePath: options.zcodeBuiltinProviderConfigFilePath,
     zcodeBuiltinEnvironment: {
@@ -1633,6 +1643,16 @@ export function createLocalServices(options: {
         return providerConnectivityAgentService.testModelConnectivity(input);
       },
     }),
+    catalogTarget: {
+      searchModelsDevCatalog: (input: Parameters<typeof modelsDevCatalogSource.search>[0]) =>
+        modelsDevCatalogSource.search(input),
+      resolveModelsDevModelMetadata: (input: Parameters<
+        typeof modelsDevCatalogSource.resolveModelMetadata
+      >[0]) => modelsDevCatalogSource.resolveModelMetadata(input),
+      discoverProviderModels: (input: Parameters<typeof providerModelsDiscovery.discover>[0]) =>
+        providerModelsDiscovery.discover(input),
+    },
+    disposeCatalogTarget: () => modelsDevCatalogSource.dispose(),
     disposeAccountSource: () => {
       disposeAccountProviderInvalidation();
       accountProviderRefreshErrorDispose();

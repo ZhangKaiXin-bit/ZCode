@@ -462,6 +462,8 @@ export const TID_MODEL_PROVIDER_MODEL_INPUT = "model-provider-model-input";
 export const TID_MODEL_PROVIDER_MODEL_DELETE_BUTTON = "model-provider-model-delete-button";
 /** 模型供应商添加模型按钮 */
 export const TID_MODEL_PROVIDER_ADD_MODEL_BUTTON = "model-provider-add-model-button";
+/** models.dev 元数据“填入”按钮 */
+export const TID_MODEL_PROVIDER_MODELS_DEV_FILL_BUTTON = "model-provider-models-dev-fill-button";
 
 // Chat Toolbar
 /** 聊天工具栏模型选择按钮 */

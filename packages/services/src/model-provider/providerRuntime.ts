@@ -22,12 +22,16 @@ import {
   type IModelSelectionService,
   type IProviderSettingsService,
   type ModelSelectionConfiguredDefaultSource,
+  type ProviderSettingsCatalogTarget,
   type ProviderSettingsConnectivityTester,
 } from "./providerFacadeServices.js";
 
 export interface ProviderRuntimeOptions extends ProviderConfigRuntimeOptions {
   readonly accountSource?: RefreshableProviderSource<AccountProviderConfigSnapshot>;
   readonly testConnectivity?: ProviderSettingsConnectivityTester;
+  /** models.dev 目录与上游模型发现能力；未提供时设置页目录功能 fail-closed。 */
+  readonly catalogTarget?: ProviderSettingsCatalogTarget;
+  readonly disposeCatalogTarget?: () => void;
 }
 
 export interface ProviderRuntimeDependencies {
@@ -37,6 +41,8 @@ export interface ProviderRuntimeDependencies {
   readonly testConnectivity?: ProviderSettingsConnectivityTester;
   readonly modelSelectionConfiguredDefaultSource?: ModelSelectionConfiguredDefaultSource;
   readonly disposeModelSelectionConfiguredDefaultSource?: () => void;
+  readonly catalogTarget?: ProviderSettingsCatalogTarget;
+  readonly disposeCatalogTarget?: () => void;
 }
 
 interface RefreshableProviderSource<TSnapshot> extends ProviderSource<TSnapshot> {
@@ -70,6 +76,7 @@ export class ProviderRuntime {
   readonly #disposeBuiltinRecovery: () => void;
   readonly #modelSelectionRuntime: IModelSelectionService & { dispose(): void };
   readonly #disposeModelSelectionConfiguredDefaultSource?: () => void;
+  readonly #disposeCatalogTarget?: () => void;
   #startPromise: ReturnType<ProviderRegistryService["start"]> | null = null;
   #disposed = false;
 
@@ -105,6 +112,7 @@ export class ProviderRuntime {
       settingsFacade,
       ensureReady,
       dependencies.testConnectivity,
+      dependencies.catalogTarget,
     );
     this.#modelSelectionRuntime = createModelSelectionService(
       createNodeModelSelectionFacade(this.registryService),
@@ -133,6 +141,7 @@ export class ProviderRuntime {
     this.registryService.dispose();
     this.#disposeAccountSource?.();
     this.#disposeModelSelectionConfiguredDefaultSource?.();
+    this.#disposeCatalogTarget?.();
     this.#configRuntime.dispose();
   }
 }
@@ -194,7 +203,13 @@ function createSettingsMutationTarget(
 }
 
 export function createProviderRuntime(options: ProviderRuntimeOptions): ProviderRuntime {
-  const { accountSource, testConnectivity, ...configRuntimeOptions } = options;
+  const {
+    accountSource,
+    testConnectivity,
+    catalogTarget,
+    disposeCatalogTarget,
+    ...configRuntimeOptions
+  } = options;
   const configRuntime = createProviderConfigRuntime(configRuntimeOptions);
   const modelSelectionConfiguredDefaultSource = new NodeModelSelectionConfigRepository({
     personalRepository: configRuntime.personalRepository,
@@ -203,6 +218,8 @@ export function createProviderRuntime(options: ProviderRuntimeOptions): Provider
     configRuntime,
     accountSource,
     testConnectivity,
+    catalogTarget,
+    disposeCatalogTarget,
     modelSelectionConfiguredDefaultSource,
     disposeModelSelectionConfiguredDefaultSource: () =>
       modelSelectionConfiguredDefaultSource.dispose(),

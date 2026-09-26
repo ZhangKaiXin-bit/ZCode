@@ -17,7 +17,14 @@ import {
   type SavePersonalModelDraftInput,
 } from "@zcode/provider";
 import { createServiceDescriptor } from "../descriptors.js";
-import type { ModelConnectivityResult } from "@zcode/shared";
+import type {
+  DiscoverProviderModelsInput,
+  DiscoverProviderModelsResult,
+  ModelConnectivityResult,
+  ModelsDevCatalogSearchResult,
+  ModelsDevModelMetadata,
+  ResolveModelsDevModelMetadataInput,
+} from "@zcode/shared";
 import { createServiceLogger } from "../logger/serviceLogger.js";
 
 export type {
@@ -68,6 +75,20 @@ export interface IProviderSettingsService {
   testModelConnectivity(
     input: ProviderSettingsConnectivityRequest,
   ): Promise<ModelConnectivityResult>;
+  /** 搜索 models.dev 公共模型目录（推荐元数据源，不落盘）。 */
+  searchModelsDevCatalog(input: {
+    readonly query: string;
+    readonly providerId?: string;
+    readonly limit?: number;
+  }): Promise<ModelsDevCatalogSearchResult>;
+  /** 从 models.dev 目录解析单个模型的推荐元数据（含价格共识）。 */
+  resolveModelsDevModelMetadata(
+    input: ResolveModelsDevModelMetadataInput,
+  ): Promise<ModelsDevModelMetadata>;
+  /** 从 Provider 兼容端点自动拉取上游模型 ID 列表（OpenAI/Anthropic /models）。 */
+  discoverProviderModels(
+    input: DiscoverProviderModelsInput,
+  ): Promise<DiscoverProviderModelsResult>;
 }
 
 export const IProviderSettingsService = createServiceDescriptor<IProviderSettingsService>(
@@ -92,6 +113,21 @@ export type ProviderSettingsConnectivityTester = (
   input: ProviderSettingsConnectivityTestInput,
 ) => Promise<ModelConnectivityResult>;
 
+/** models.dev 目录与上游发现能力；由 Services 装配层注入，测试/旧 host 可不提供。 */
+export interface ProviderSettingsCatalogTarget {
+  searchModelsDevCatalog(input: {
+    readonly query: string;
+    readonly providerId?: string;
+    readonly limit?: number;
+  }): Promise<ModelsDevCatalogSearchResult>;
+  resolveModelsDevModelMetadata(
+    input: ResolveModelsDevModelMetadataInput,
+  ): Promise<ModelsDevModelMetadata>;
+  discoverProviderModels(
+    input: DiscoverProviderModelsInput,
+  ): Promise<DiscoverProviderModelsResult>;
+}
+
 export interface IModelSelectionService {
   readonly onDidChange: Event<ModelSelectionView>;
   getView(input?: ModelSelectionViewInput): Promise<ModelSelectionView>;
@@ -110,6 +146,7 @@ export function createProviderSettingsService(
   facade: ProviderSettingsFacade,
   ensureReady: () => Promise<void> = async () => {},
   testConnectivity?: ProviderSettingsConnectivityTester,
+  catalog?: ProviderSettingsCatalogTarget,
 ): IProviderSettingsService {
   return {
     onDidChange: toEvent((listener) => facade.onDidChange(listener)),
@@ -205,6 +242,21 @@ export function createProviderSettingsService(
         providerId: input.providerId,
         modelId: input.modelId,
       });
+    },
+    searchModelsDevCatalog: async (input) => {
+      await ensureReady();
+      if (!catalog) throw new Error("当前 Environment 未装配 models.dev 目录能力");
+      return catalog.searchModelsDevCatalog(input);
+    },
+    resolveModelsDevModelMetadata: async (input) => {
+      await ensureReady();
+      if (!catalog) throw new Error("当前 Environment 未装配 models.dev 目录能力");
+      return catalog.resolveModelsDevModelMetadata(input);
+    },
+    discoverProviderModels: async (input) => {
+      await ensureReady();
+      if (!catalog) throw new Error("当前 Environment 未装配上游模型发现能力");
+      return catalog.discoverProviderModels(input);
     },
   };
 }

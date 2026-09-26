@@ -30,6 +30,8 @@ import {
   ModelConfigDraftFeedback,
   ModelConfigRestoreButton,
 } from "@/settings/model-provider-section/ProviderModelMetadataDialogActions.js";
+import type { ModelsDevModelMetadata } from "@zcode/shared";
+import { ModelsDevMetadataPanel } from "@/settings/model-provider-section/ModelsDevMetadataPanel.js";
 import { modelEditorControlStyle } from "@/settings/model-provider-section/modelEditorControlStyle.js";
 import { cn } from "@/components/lib/utils.js";
 import {
@@ -61,6 +63,9 @@ export function ProviderModelMetadataDialog({
   saving = false,
   modelDefaultsLoaded = false,
   onModelIdBlur,
+  modelsDevMetadata,
+  modelsDevFetching = false,
+  onModelsDevApply,
 }: {
   mode?: "add" | "edit";
   open: boolean;
@@ -79,6 +84,9 @@ export function ProviderModelMetadataDialog({
   saving?: boolean;
   modelDefaultsLoaded?: boolean;
   onModelIdBlur?: () => void;
+  modelsDevMetadata?: ModelsDevModelMetadata | null;
+  modelsDevFetching?: boolean;
+  onModelsDevApply?: () => void;
 }) {
   const { intl } = useZCodeIntl();
   const [validationAttempt, setValidationAttempt] = useState(0);
@@ -197,6 +205,13 @@ export function ProviderModelMetadataDialog({
                   onCompositionEnd={handleCompositionEnd}
                   onKeyDown={handleTechnicalInputKeyDown}
                 />
+                {modelsDevMetadata && onModelsDevApply ? (
+                  <ModelsDevMetadataPanel
+                    metadata={modelsDevMetadata}
+                    fetching={modelsDevFetching}
+                    onApply={onModelsDevApply}
+                  />
+                ) : null}
               </div>
             </div>
           </ModelSettingsGroup>
