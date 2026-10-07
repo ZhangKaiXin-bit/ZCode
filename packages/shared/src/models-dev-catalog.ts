@@ -87,6 +87,26 @@ export const modelsDevPriceSchema = z
 
 export type ModelsDevPrice = z.infer<typeof modelsDevPriceSchema>;
 
+/**
+ * 精确未命中时的近似候选。只用于展示与“用户点选后填入”，不参与自动采信，
+ * 因此不带 price 置信度，只带条目自身的原始事实。
+ */
+export const modelsDevCatalogCandidateSchema = z
+  .object({
+    id: z.string().min(1),
+    providerId: z.string().min(1),
+    providerName: z.string().min(1),
+    name: z.string().min(1),
+    reasoning: z.boolean().nullable().optional(),
+    input: z.array(z.enum(["text", "image"])).readonly().nullable().optional(),
+    contextWindow: z.number().int().positive().nullable().optional(),
+    maxTokens: z.number().int().positive().nullable().optional(),
+    cost: modelsDevPriceSchema.shape.cost,
+  })
+  .strict();
+
+export type ModelsDevCatalogCandidate = z.infer<typeof modelsDevCatalogCandidateSchema>;
+
 /** 依据一个模型 ID（可选 provider / baseUrl 线索）得到的元数据推荐。 */
 export const modelsDevModelMetadataSchema = z
   .object({
@@ -94,6 +114,8 @@ export const modelsDevModelMetadataSchema = z
     metadataMethod: z.enum(["provider", "base-url", "consensus", "none"]),
     matchedProviderId: z.string().min(1).nullable().optional(),
     matchedProviderName: z.string().min(1).nullable().optional(),
+    /** 精确无命中时给出的 models.dev 近似候选（最多 5 条），供用户手选。 */
+    candidates: z.array(modelsDevCatalogCandidateSchema).readonly().nullable().optional(),
     preset: z
       .object({
         name: z.string().min(1).nullable().optional(),

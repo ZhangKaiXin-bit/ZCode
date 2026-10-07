@@ -11,7 +11,11 @@ import type {
   ProviderSettingsFormProvider,
   ProviderSettingsFormModel,
 } from "@/lib/providerSettingsFormTypes.js";
-import type { ModelConnectivityResult } from "@zcode/shared";
+import type {
+  ModelConnectivityResult,
+  ModelsDevCatalogCandidate,
+  ModelsDevModelMetadata,
+} from "@zcode/shared";
 import {
   TID_MODEL_PROVIDER_ADD_MODEL_BUTTON,
   TID_MODEL_PROVIDER_BASE_URL_INPUT,
@@ -419,28 +423,48 @@ export function ProviderModelsSection({
     baseUrl: providerApiBaseUrl,
     providerSettingsService,
   });
+  const applyModelsDevPreset = useCallback(
+    (preset: ModelsDevModelMetadata["preset"] | null | undefined) => {
+      if (!preset) return;
+      const patch: Partial<ProviderModelDraftValues> = {};
+      if (preset.contextWindow !== undefined && preset.contextWindow !== null) {
+        patch.contextWindowValue = String(preset.contextWindow);
+      }
+      if (preset.maxTokens !== undefined && preset.maxTokens !== null) {
+        patch.maxOutputTokensValue = String(preset.maxTokens);
+      }
+      if (preset.input !== undefined && preset.input !== null) {
+        patch.inputFormatValue = {
+          supportsText: true,
+          supportsImage: preset.input.includes("image"),
+          supportsVideo: false,
+          supportsAudio: false,
+          supportsPdf: false,
+        };
+      }
+      if (Object.keys(patch).length === 0) return;
+      editor.change(patch);
+    },
+    [editor],
+  );
+
   const applyModelsDevMetadata = useCallback(() => {
-    const preset = modelsDev.metadata?.preset;
-    if (!preset) return;
-    const patch: Partial<ProviderModelDraftValues> = {};
-    if (preset.contextWindow !== undefined && preset.contextWindow !== null) {
-      patch.contextWindowValue = String(preset.contextWindow);
-    }
-    if (preset.maxTokens !== undefined && preset.maxTokens !== null) {
-      patch.maxOutputTokensValue = String(preset.maxTokens);
-    }
-    if (preset.input !== undefined && preset.input !== null) {
-      patch.inputFormatValue = {
-        supportsText: true,
-        supportsImage: preset.input.includes("image"),
-        supportsVideo: false,
-        supportsAudio: false,
-        supportsPdf: false,
-      };
-    }
-    if (Object.keys(patch).length === 0) return;
-    editor.change(patch);
-  }, [modelsDev.metadata, editor]);
+    applyModelsDevPreset(modelsDev.metadata?.preset);
+  }, [applyModelsDevPreset, modelsDev.metadata?.preset]);
+
+  // 精确未命中时的候选只填元数据（上下文/最大输出/模态），不替用户改写模型 ID。
+  const applyModelsDevCandidate = useCallback(
+    (candidate: ModelsDevCatalogCandidate) => {
+      applyModelsDevPreset({
+        ...(candidate.contextWindow === undefined
+          ? {}
+          : { contextWindow: candidate.contextWindow }),
+        ...(candidate.maxTokens === undefined ? {} : { maxTokens: candidate.maxTokens }),
+        ...(candidate.input === undefined ? {} : { input: candidate.input }),
+      });
+    },
+    [applyModelsDevPreset],
+  );
 
   const openAddDialog = useCallback(() => {
     editor.reset(createEmptyModel());
@@ -648,6 +672,9 @@ export function ProviderModelsSection({
           modelsDevMetadata={modelsDev.metadata}
           modelsDevFetching={modelsDev.fetching}
           onModelsDevApply={modelsDev.metadata ? applyModelsDevMetadata : undefined}
+          onModelsDevApplyCandidate={
+            (modelsDev.metadata?.candidates?.length ?? 0) > 0 ? applyModelsDevCandidate : undefined
+          }
         />
         <ProviderModelsDiscoveryDialog
           open={discoveryOpen}

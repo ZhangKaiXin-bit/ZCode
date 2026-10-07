@@ -119,12 +119,13 @@ test("metadata: 无命中返回 none + 不可靠价格", () => {
 });
 
 test("metadata: 单条 provider 精确匹配可靠", () => {
-  // openrouter 的 id 带 anthropic/ 前缀，不归一为裸 id；精确匹配只有 anthropic 一条。
+  // openrouter 的显示名同为 Claude Sonnet 4.5，归一后也算命中（共 2 条）；
+  // provider 线索仍把采信锁定在 anthropic，价格取 provider 而不是共识。
   const metadata = resolveModelsDevEntriesMetadata(catalog, {
     modelId: "claude-sonnet-4-5",
     providerId: "anthropic",
   });
-  assert.equal(metadata.exactMatches, 1);
+  assert.equal(metadata.exactMatches, 2);
   assert.equal(metadata.metadataMethod, "provider");
   assert.equal(metadata.preset.name, "Claude Sonnet 4.5");
   assert.equal(metadata.preset.contextWindow, 200000);
@@ -202,4 +203,103 @@ test("metadata: 单条精确命中直接采信（无分歧可裁）", () => {
   // 单条价格仍保持 pi-web 的保守性：无佐证即不可靠，不混入 preset。
   assert.equal(metadata.price.status, "unreliable");
   assert.equal(metadata.price.reason, "insufficient-support");
+});
+
+const solCatalog = [
+  entry({
+    providerId: "openai",
+    providerName: "OpenAI",
+    id: "gpt-6.1-sol",
+    name: "GPT-6.1 Sol",
+    contextWindow: 1050000,
+    maxTokens: 128000,
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+  }),
+  entry({
+    providerId: "nano-gpt",
+    providerName: "NanoGPT",
+    id: "openai/gpt-6.1-sol-pro",
+    name: "GPT 6.1 Sol Pro",
+    contextWindow: 1050000,
+    maxTokens: 128000,
+  }),
+];
+
+test("metadata: 空格/点号/大小写差异与显示名都能命中同一条目", () => {
+  // 用户常直接粘显示名或换一种分隔符，归一化后必须等价于目录里的 id。
+  for (const modelId of [
+    "gpt-6.1-sol",
+    "GPT 6.1 Sol",
+    "GPT-6.1Sol",
+    "gpt_6_1_sol",
+    "models/gpt-6.1-sol",
+    "gpt61sol",
+  ]) {
+    const metadata = resolveModelsDevEntriesMetadata(solCatalog, {
+      modelId,
+      providerId: "openai",
+    });
+    assert.equal(metadata.exactMatches, 1, `exactMatches for ${modelId}`);
+    assert.equal(metadata.metadataMethod, "provider", `method for ${modelId}`);
+    assert.equal(metadata.preset.contextWindow, 1050000, `context for ${modelId}`);
+    assert.equal(metadata.preset.maxTokens, 128000, `maxTokens for ${modelId}`);
+  }
+});
+
+test("metadata: 目录里只有带 provider 前缀的 -pro 变体时按显示名命中", () => {
+  // 用户填裸 id "gpt-6.1-sol-pro"，目录只有 nano-gpt 的 "openai/gpt-6.1-sol-pro"，
+  // 但它的显示名归一后与输入一致，因此仍是精确命中而不是候选。
+  const metadata = resolveModelsDevEntriesMetadata(solCatalog, { modelId: "gpt-6.1-sol-pro" });
+  assert.equal(metadata.exactMatches, 1);
+  assert.equal(metadata.price.status, "unreliable");
+  assert.equal(metadata.preset.contextWindow, 1050000);
+});
+
+test("metadata: 精确无命中时退化为候选列表（不再直接空面板）", () => {
+  const candidateCatalog = [
+    entry({
+      providerId: "nano-gpt",
+      providerName: "NanoGPT",
+      id: "openai/gpt-6.1-sol-pro",
+      name: "Pro Sol（NanoGPT）",
+      contextWindow: 1050000,
+      maxTokens: 128000,
+    }),
+    entry({
+      providerId: "openai",
+      providerName: "OpenAI",
+      id: "gpt-6.1-sol",
+      name: "Sol 6.1",
+      contextWindow: 1050000,
+    }),
+  ];
+  const metadata = resolveModelsDevEntriesMetadata(candidateCatalog, { modelId: "gpt-6.1-sol-pro" });
+  assert.equal(metadata.exactMatches, 0);
+  assert.equal(metadata.metadataMethod, "none");
+  assert.equal(metadata.preset.contextWindow, undefined);
+  const candidates = metadata.candidates ?? [];
+  assert.ok(candidates.length >= 2);
+  // 包含查询键的条目（rank 2）排在仅被查询键包含的缩短候选（rank 3）前面。
+  assert.equal(candidates[0]!.id, "openai/gpt-6.1-sol-pro");
+  assert.equal(candidates[0]!.providerId, "nano-gpt");
+  assert.equal(candidates[1]!.id, "gpt-6.1-sol");
+});
+
+test("metadata: 完全无关的输入不给候选", () => {
+  const metadata = resolveModelsDevEntriesMetadata(solCatalog, { modelId: "totally-unrelated" });
+  assert.equal(metadata.exactMatches, 0);
+  assert.equal(metadata.candidates, undefined);
+});
+
+test("metadata: 版本号打错时用相似度给出近似候选", () => {
+  // 目录里只有 6.1，输入 6.2：精确无命中，但应给出 6.1 作为候选让用户挑。
+  const metadata = resolveModelsDevEntriesMetadata(solCatalog, {
+    modelId: "gpt-6.2-sol",
+    providerId: "openai",
+  });
+  assert.equal(metadata.exactMatches, 0);
+  const candidates = metadata.candidates ?? [];
+  assert.ok(candidates.some((candidate) => candidate.id === "gpt-6.1-sol"));
 });

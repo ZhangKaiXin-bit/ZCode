@@ -3200,6 +3200,11 @@ const zhCN: Record<string, string> = {
   "settings.modelProvider.modelsDev.supportsImage": "支持图片",
   "settings.modelProvider.modelsDev.supportsReasoning": "支持推理",
   "settings.modelProvider.modelsDev.price": "价格：输入 ${input} / 输出 ${output} 每百万 Token",
+  "settings.modelProvider.modelsDev.candidates.title":
+    "models.dev 没有精确命中，可从这些条目里挑一条",
+  "settings.modelProvider.modelsDev.candidates.item": "{provider} · {id}",
+  "settings.modelProvider.modelsDev.candidates.hint":
+    "填入只写上下文长度与输入模态，不会改模型 ID，也不会覆盖 Override",
   "settings.modelProvider.discover.button": "拉取上游模型",
   "settings.modelProvider.discover.title": "从上游拉取模型",
   "settings.modelProvider.discover.description": "从当前供应商的模型列表端点自动拉取可用模型。",

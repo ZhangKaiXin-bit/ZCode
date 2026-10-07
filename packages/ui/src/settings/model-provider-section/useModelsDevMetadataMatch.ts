@@ -75,7 +75,8 @@ export function useModelsDevMetadataMatch({
         })
         .then((metadata) => {
           if (generationRef.current !== generation) return;
-          if (metadata.exactMatches === 0) {
+          // 精确无命中但有近似候选时保留面板，交给用户在候选列表里自行挑选。
+          if (metadata.exactMatches === 0 && (metadata.candidates?.length ?? 0) === 0) {
             setState({ metadata: null, matchedModelId: null, fetching: false });
             return;
           }

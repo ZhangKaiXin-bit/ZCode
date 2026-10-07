@@ -1,5 +1,9 @@
+/* eslint-disable max-lines */
+// 本文件聚合 models.dev 目录的归一化、精确匹配、共识价格与候选检索：四条链路必须共用
+// 同一套归一化规则，拆成多文件容易让“自动采信”和“人工候选”的语义悄悄漂移。
 import type {
   ModelsDevCatalogEntry,
+  ModelsDevCatalogCandidate,
   ModelsDevModelMetadata,
   ModelsDevMetadataMethod,
   ModelsDevPrice,
@@ -21,6 +25,12 @@ const KNOWN_PROVIDER_HOSTS: Readonly<Record<string, readonly string[]>> = Object
 
 /** rank 语义与 pi-web 一致：0 精确命中 … 10 无关；20 为不匹配哨兵值。 */
 const RANK_UNMATCHED = 20;
+
+/** 兜底候选列表的返回条数：只用于让用户手选，不参与自动填充。 */
+const CANDIDATE_LIMIT = 5;
+
+/** 候选检索的最后一级：归一化键与输入的 bigram Dice 相似度下限（容忍版本号等拼写差异）。 */
+const CANDIDATE_MIN_SIMILARITY = 0.55;
 
 interface SearchOptions {
   readonly query: string;
@@ -90,15 +100,25 @@ export function resolveModelsDevEntriesMetadata(
   const normalizedQuery = normalizeModelId(input.modelId);
   const normalizedProviderId = normalizeAlnum(input.providerId ?? "");
   const baseUrlHostname = parseHostname(input.baseUrl);
-  const exactMatches = entries.filter((entry) => {
-    const normalizedId = normalizeModelId(entry.id);
-    const combined = `${entry.providerId.toLocaleLowerCase()}/${normalizedId}`;
-    return normalizedId === normalizedQuery || combined === normalizedQuery;
-  });
+  // 匹配按归一化键比较：ID、providerId/ID 组合与显示名都参与，空格/点号/连字符/大小写
+  // 一律忽略（用户常直接粘显示名，如 "GPT 6.1 Sol" 对应 id "gpt-6.1-sol"）。
+  const exactMatches =
+    normalizedQuery === ""
+      ? []
+      : entries.filter((entry) =>
+          entryIdentityKeys(entry).some((key) => key === normalizedQuery),
+        );
   if (exactMatches.length === 0) {
+    // 没有任何精确命中时不再直接返回空面板，而是给出 models.dev 里的近似候选让用户手选。
+    const candidates = searchModelsDevCatalogCandidates(entries, {
+      query: input.modelId,
+      providerId: input.providerId,
+      limit: CANDIDATE_LIMIT,
+    });
     return {
       exactMatches: 0,
       metadataMethod: "none",
+      ...(candidates.length > 0 ? { candidates } : {}),
       preset: {},
       price: {
         status: "unreliable",
@@ -108,6 +128,131 @@ export function resolveModelsDevEntriesMetadata(
       },
     };
   }
+
+  return resolveMatchedEntriesMetadata(exactMatches, {
+    normalizedProviderId,
+    baseUrlHostname,
+  });
+}
+
+/**
+ * 精确无命中时的近似候选：按归一化 ID / 显示名 / providerId+ID 做前缀、包含与全 token 匹配，
+ * 同分时同 provider 优先。纯检索，不影响自动填充的信任链。
+ */
+export function searchModelsDevCatalogCandidates(
+  entries: readonly ModelsDevCatalogEntry[],
+  options: { query: string; providerId?: string; limit?: number },
+): ModelsDevCatalogCandidate[] {
+  const queryKey = normalizeModelId(options.query);
+  if (queryKey.length < 2) return [];
+  const tokens = tokenizeModelQuery(options.query);
+  const providerKey = normalizeAlnum(options.providerId ?? "");
+  const limit = Math.max(1, Math.min(CANDIDATE_LIMIT, options.limit ?? CANDIDATE_LIMIT));
+  const ranked = entries
+    .map((entry) => ({
+      entry,
+      rank: rankCandidate(entry, queryKey, tokens, providerKey),
+    }))
+    .filter((item) => item.rank < RANK_UNMATCHED);
+  if (ranked.length === 0) return [];
+  ranked.sort(
+    (left, right) =>
+      left.rank - right.rank ||
+      left.entry.providerName.localeCompare(right.entry.providerName, undefined, {
+        sensitivity: "base",
+      }) ||
+      left.entry.name.localeCompare(right.entry.name, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      }) ||
+      left.entry.id.localeCompare(right.entry.id, undefined, { numeric: true, sensitivity: "base" }),
+  );
+  return ranked.slice(0, limit).map((item) => toCandidate(item.entry));
+}
+
+function rankCandidate(
+  entry: ModelsDevCatalogEntry,
+  queryKey: string,
+  tokens: readonly string[],
+  providerKey: string,
+): number {
+  const identityKeys = entryIdentityKeys(entry);
+  // token 兜底只认 id 与显示名，不吃 providerId 前缀，避免 "302ai" 这类前缀把无关条目的
+  // 数字 token 凑齐后混进候选。
+  const tokenKeys = [normalizeModelId(entry.id), normalizeModelId(entry.name)];
+  let rank = RANK_UNMATCHED;
+  if (identityKeys.some((key) => key === queryKey)) rank = 0;
+  else if (identityKeys.some((key) => key.startsWith(queryKey))) rank = 1;
+  else if (identityKeys.some((key) => key.includes(queryKey))) rank = 2;
+  // 反向包含：用户输入更长（带日期、-pro 等后缀）时仍能给出缩短后的候选。
+  else if (identityKeys.some((key) => key.length > 0 && queryKey.includes(key))) rank = 3;
+  else if (tokens.length > 1 && tokenKeys.some((key) => tokens.every((token) => key.includes(token))))
+    rank = 4;
+  else if (tokenKeys.some((key) => bigramDice(key, queryKey) >= CANDIDATE_MIN_SIMILARITY)) rank = 5;
+  if (rank < RANK_UNMATCHED && providerKey !== "" && normalizeAlnum(entry.providerId) === providerKey)
+    rank -= 0.5;
+  return rank;
+}
+
+function bigramDice(left: string, right: string): number {
+  if (left === right) return 1;
+  if (left.length < 2 || right.length < 2) return 0;
+  const grams = (value: string): Map<string, number> => {
+    const counts = new Map<string, number>();
+    for (let index = 0; index < value.length - 1; index += 1) {
+      const gram = value.slice(index, index + 2);
+      counts.set(gram, (counts.get(gram) ?? 0) + 1);
+    }
+    return counts;
+  };
+  const leftGrams = grams(left);
+  const rightGrams = grams(right);
+  let overlap = 0;
+  for (const [gram, count] of leftGrams) {
+    overlap += Math.min(count, rightGrams.get(gram) ?? 0);
+  }
+  const total = left.length - 1 + (right.length - 1);
+  return total === 0 ? 0 : (2 * overlap) / total;
+}
+
+function tokenizeModelQuery(query: string): string[] {
+  return [
+    ...new Set(
+      query
+        .toLocaleLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((token) => token.length > 0),
+    ),
+  ];
+}
+
+function entryIdentityKeys(entry: ModelsDevCatalogEntry): string[] {
+  return [
+    normalizeModelId(entry.id),
+    normalizeModelId(`${entry.providerId}/${entry.id}`),
+    normalizeModelId(entry.name),
+  ];
+}
+
+function toCandidate(entry: ModelsDevCatalogEntry): ModelsDevCatalogCandidate {
+  return {
+    id: entry.id,
+    providerId: entry.providerId,
+    providerName: entry.providerName,
+    name: entry.name,
+    ...(entry.contextWindow === undefined ? {} : { contextWindow: entry.contextWindow }),
+    ...(entry.maxTokens === undefined ? {} : { maxTokens: entry.maxTokens }),
+    ...(entry.input === undefined ? {} : { input: entry.input }),
+    ...(entry.reasoning === undefined ? {} : { reasoning: entry.reasoning }),
+    ...(entry.cost === undefined ? {} : { cost: entry.cost }),
+  };
+}
+
+function resolveMatchedEntriesMetadata(
+  exactMatches: readonly ModelsDevCatalogEntry[],
+  hints: { normalizedProviderId: string; baseUrlHostname: string | undefined },
+): ModelsDevModelMetadata {
+  const { normalizedProviderId, baseUrlHostname } = hints;
 
   const providerMatches = exactMatches.filter(
     (entry) =>
@@ -347,8 +492,12 @@ function consensusNumber(
   return { [key]: parsed };
 }
 
+/**
+ * 模型 ID / 显示名的匹配键：去掉 models/ 前缀后只保留字母数字，忽略大小写、空格与点号、
+ * 连字符、下划线等分隔符，保证 "GPT 6.1 Sol"、"gpt-6.1-sol"、"models/gpt-6.1-sol" 等价。
+ */
 function normalizeModelId(value: string): string {
-  return value.trim().toLocaleLowerCase().replace(/^models\//, "");
+  return normalizeAlnum(value.trim().replace(/^models\//i, ""));
 }
 
 function normalizeAlnum(value: string): string {

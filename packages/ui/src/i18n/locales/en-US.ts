@@ -3424,6 +3424,11 @@ const enUS: Record<string, string> = {
   "settings.modelProvider.modelsDev.supportsImage": "supports images",
   "settings.modelProvider.modelsDev.supportsReasoning": "supports reasoning",
   "settings.modelProvider.modelsDev.price": "Price: ${input} in / ${output} out per 1M tokens",
+  "settings.modelProvider.modelsDev.candidates.title":
+    "No exact models.dev match — pick one of these",
+  "settings.modelProvider.modelsDev.candidates.item": "{provider} · {id}",
+  "settings.modelProvider.modelsDev.candidates.hint":
+    "Fill writes context length and input modalities only; the model ID and Overrides stay unchanged",
   "settings.modelProvider.discover.button": "Fetch upstream models",
   "settings.modelProvider.discover.title": "Fetch upstream models",
   "settings.modelProvider.discover.description":
