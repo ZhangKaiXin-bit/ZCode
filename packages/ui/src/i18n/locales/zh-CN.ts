@@ -3199,6 +3199,8 @@ const zhCN: Record<string, string> = {
   "settings.modelProvider.modelsDev.maxTokens": "最大输出 {value}",
   "settings.modelProvider.modelsDev.supportsImage": "支持图片",
   "settings.modelProvider.modelsDev.supportsReasoning": "支持推理",
+  "settings.modelProvider.modelsDev.supportsStructuredOutput": "支持结构化输出",
+  "settings.modelProvider.modelsDev.reasoningLevels": "推理档位 {values}",
   "settings.modelProvider.modelsDev.price": "价格：输入 ${input} / 输出 ${output} 每百万 Token",
   "settings.modelProvider.modelsDev.candidates.title":
     "models.dev 没有精确命中，可从这些条目里挑一条",

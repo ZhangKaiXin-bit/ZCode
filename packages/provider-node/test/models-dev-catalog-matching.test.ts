@@ -303,3 +303,51 @@ test("metadata: 版本号打错时用相似度给出近似候选", () => {
   const candidates = metadata.candidates ?? [];
   assert.ok(candidates.some((candidate) => candidate.id === "gpt-6.1-sol"));
 });
+
+test("metadata: 结构化输出/推理档位/PDF 随元数据一起返回", () => {
+  const withCapabilities = [
+    entry({
+      providerId: "openai",
+      providerName: "OpenAI",
+      id: "gpt-6.1-sol",
+      name: "GPT-6.1 Sol",
+      contextWindow: 1050000,
+      maxTokens: 128000,
+      reasoning: true,
+      structuredOutput: true,
+      reasoningLevels: ["low", "medium", "high", "xhigh", "max"],
+      input: ["text", "image", "pdf"],
+    }),
+  ];
+  const metadata = resolveModelsDevEntriesMetadata(withCapabilities, {
+    modelId: "GPT-6.1 Sol",
+    providerId: "openai",
+  });
+  assert.equal(metadata.exactMatches, 1);
+  assert.equal(metadata.preset.contextWindow, 1050000);
+  assert.equal(metadata.preset.maxTokens, 128000);
+  assert.equal(metadata.preset.structuredOutput, true);
+  assert.deepEqual(metadata.preset.reasoningLevels, ["low", "medium", "high", "xhigh", "max"]);
+  assert.deepEqual(metadata.preset.input, ["text", "image", "pdf"]);
+});
+
+test("candidate: 候选里也带结构化输出与推理档位", () => {
+  const candidateCatalog = [
+    entry({
+      providerId: "openai",
+      providerName: "OpenAI",
+      id: "gpt-6.1-sol",
+      name: "GPT-6.1 Sol",
+      structuredOutput: true,
+      reasoningLevels: ["low", "high"],
+      input: ["text", "image", "pdf"],
+    }),
+  ];
+  const metadata = resolveModelsDevEntriesMetadata(candidateCatalog, { modelId: "gpt-6.2-sol" });
+  assert.equal(metadata.exactMatches, 0);
+  const candidate = (metadata.candidates ?? [])[0];
+  assert.ok(candidate);
+  assert.equal(candidate.structuredOutput, true);
+  assert.deepEqual(candidate.reasoningLevels, ["low", "high"]);
+  assert.deepEqual(candidate.input, ["text", "image", "pdf"]);
+});

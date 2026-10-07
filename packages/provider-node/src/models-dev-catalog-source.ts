@@ -179,6 +179,12 @@ function parseCatalogPayload(payload: unknown): ModelsDevCatalogEntry[] {
         cost: parseCost(model.cost),
         ...(providerBaseUrl ? { providerBaseUrl } : {}),
         ...(typeof model.reasoning === "boolean" ? { reasoning: model.reasoning } : {}),
+        ...(typeof model.structured_output === "boolean"
+          ? { structuredOutput: model.structured_output }
+          : {}),
+        ...(parseReasoningLevels(model) === undefined
+          ? {}
+          : { reasoningLevels: parseReasoningLevels(model) }),
         ...parseInputModalities(model.modalities),
         ...parseLimits(model.limit),
       });
@@ -205,17 +211,48 @@ function parseCost(cost: unknown): ModelsDevCatalogEntry["cost"] {
   };
 }
 
-function parseInputModalities(modalities: unknown): { input?: ReadonlyArray<"text" | "image"> } {
+/**
+ * 目录里的 `reasoning_options` 决定设置页「推理等级」候选：
+ * - `effort` 直接给出档位（low/medium/high/...）
+ * - `toggle` 只表示可开关，按本产品约定映射成 disabled/enabled
+ * - 模型明确不支持推理时只保留 disabled，避免出现能选但无效的档位
+ */
+function parseReasoningLevels(model: Record<string, unknown>): ReadonlyArray<string> | undefined {
+  const options = model.reasoning_options;
+  if (Array.isArray(options)) {
+    for (const option of options) {
+      if (!isRecord(option) || option.type !== "effort") continue;
+      if (!Array.isArray(option.values)) continue;
+      const values = [
+        ...new Set(
+          option.values
+            .filter((value): value is string => typeof value === "string")
+            .map((value) => value.trim())
+            .filter((value) => value.length > 0),
+        ),
+      ];
+      if (values.length > 0) return values;
+    }
+    if (options.some((option) => isRecord(option) && option.type === "toggle")) {
+      return ["disabled", "enabled"];
+    }
+  }
+  return model.reasoning === false ? ["disabled"] : undefined;
+}
+
+function parseInputModalities(
+  modalities: unknown,
+): { input?: ReadonlyArray<"text" | "image" | "pdf"> } {
   if (!isRecord(modalities) || !Array.isArray(modalities.input)) return {};
-  const allowed = new Set(["text", "image"]);
+  const allowed = new Set(["text", "image", "pdf"]);
   const input = [
     ...new Set(
       modalities.input
         .filter((item): item is string => typeof item === "string")
         .map((item) => item.trim().toLocaleLowerCase())
-        .filter((item) => allowed.has(item)),
+      .filter((item) => allowed.has(item)),
     ),
-  ] as ReadonlyArray<"text" | "image">;
+  ] as ReadonlyArray<"text" | "image" | "pdf">;
   return input.length > 0 ? { input } : {};
 }
 

@@ -55,6 +55,19 @@ export function ModelsDevMetadataPanel({
         ),
       );
     }
+    if (candidate.structuredOutput === true) {
+      facts.push(
+        intl.formatMessage({ id: "settings.modelProvider.modelsDev.supportsStructuredOutput" }),
+      );
+    }
+    if (candidate.reasoningLevels != null && candidate.reasoningLevels.length > 0) {
+      facts.push(
+        intl.formatMessage(
+          { id: "settings.modelProvider.modelsDev.reasoningLevels" },
+          { values: candidate.reasoningLevels.join(" / ") },
+        ),
+      );
+    }
     if (candidate.cost) {
       facts.push(
         intl.formatMessage(
@@ -146,6 +159,19 @@ export function ModelsDevMetadataPanel({
   }
   if (preset.reasoning === true) {
     facts.push(intl.formatMessage({ id: "settings.modelProvider.modelsDev.supportsReasoning" }));
+  }
+  if (preset.structuredOutput === true) {
+    facts.push(
+      intl.formatMessage({ id: "settings.modelProvider.modelsDev.supportsStructuredOutput" }),
+    );
+  }
+  if (preset.reasoningLevels != null && preset.reasoningLevels.length > 0) {
+    facts.push(
+      intl.formatMessage(
+        { id: "settings.modelProvider.modelsDev.reasoningLevels" },
+        { values: preset.reasoningLevels.join(" / ") },
+      ),
+    );
   }
 
   const methodLabel = intl.formatMessage({

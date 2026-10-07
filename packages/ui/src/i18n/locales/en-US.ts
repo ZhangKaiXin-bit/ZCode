@@ -3423,6 +3423,8 @@ const enUS: Record<string, string> = {
   "settings.modelProvider.modelsDev.maxTokens": "max output {value}",
   "settings.modelProvider.modelsDev.supportsImage": "supports images",
   "settings.modelProvider.modelsDev.supportsReasoning": "supports reasoning",
+  "settings.modelProvider.modelsDev.supportsStructuredOutput": "supports structured output",
+  "settings.modelProvider.modelsDev.reasoningLevels": "reasoning levels {values}",
   "settings.modelProvider.modelsDev.price": "Price: ${input} in / ${output} out per 1M tokens",
   "settings.modelProvider.modelsDev.candidates.title":
     "No exact models.dev match — pick one of these",

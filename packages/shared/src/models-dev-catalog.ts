@@ -10,6 +10,24 @@ import { z } from "zod";
 
 export const MODELS_DEV_CATALOG_URL = "https://models.dev/api.json";
 
+/**
+ * 目录里可表达、且本产品输入类型控件能承载的模态。视频/音频目录里不提供，保持不支持。
+ */
+export const MODELS_DEV_INPUT_MODALITIES = ["text", "image", "pdf"] as const;
+
+const modelsDevInputModalitiesSchema = z
+  .array(z.enum(MODELS_DEV_INPUT_MODALITIES))
+  .readonly()
+  .nullable()
+  .optional();
+
+/** 推理等级取值列表（按推理强度从低到高），与设置页「推理等级」同语义。 */
+const modelsDevReasoningLevelsSchema = z
+  .array(z.string().min(1))
+  .readonly()
+  .nullable()
+  .optional();
+
 /** models.dev 目录的原始条目（只保留本产品消费的字段，其余字段在下载边界丢弃）。 */
 export const modelsDevCatalogEntrySchema = z
   .object({
@@ -31,7 +49,9 @@ export const modelsDevCatalogEntrySchema = z
       .optional(),
     providerBaseUrl: z.string().min(1).nullable().optional(),
     reasoning: z.boolean().nullable().optional(),
-    input: z.array(z.enum(["text", "image"])).readonly().nullable().optional(),
+    input: modelsDevInputModalitiesSchema,
+    structuredOutput: z.boolean().nullable().optional(),
+    reasoningLevels: modelsDevReasoningLevelsSchema,
     contextWindow: z.number().int().positive().nullable().optional(),
     maxTokens: z.number().int().positive().nullable().optional(),
   })
@@ -98,7 +118,9 @@ export const modelsDevCatalogCandidateSchema = z
     providerName: z.string().min(1),
     name: z.string().min(1),
     reasoning: z.boolean().nullable().optional(),
-    input: z.array(z.enum(["text", "image"])).readonly().nullable().optional(),
+    input: modelsDevInputModalitiesSchema,
+    structuredOutput: z.boolean().nullable().optional(),
+    reasoningLevels: modelsDevReasoningLevelsSchema,
     contextWindow: z.number().int().positive().nullable().optional(),
     maxTokens: z.number().int().positive().nullable().optional(),
     cost: modelsDevPriceSchema.shape.cost,
@@ -120,7 +142,9 @@ export const modelsDevModelMetadataSchema = z
       .object({
         name: z.string().min(1).nullable().optional(),
         reasoning: z.boolean().nullable().optional(),
-        input: z.array(z.enum(["text", "image"])).readonly().nullable().optional(),
+        input: modelsDevInputModalitiesSchema,
+        structuredOutput: z.boolean().nullable().optional(),
+        reasoningLevels: modelsDevReasoningLevelsSchema,
         contextWindow: z.number().int().positive().nullable().optional(),
         maxTokens: z.number().int().positive().nullable().optional(),
         cost: modelsDevPriceSchema.shape.cost,

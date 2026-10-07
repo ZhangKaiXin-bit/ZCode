@@ -43,6 +43,7 @@ import { ModelRowInput } from "./ProviderFormControls.js";
 import { PresetProviderApiKeyBanner } from "./PresetProviderApiKeyBanner.js";
 import { type ProviderModelDraftValues } from "@/settings/model-provider-section/ProviderModelMetadata.js";
 import { ProviderModelMetadataDialog } from "@/settings/model-provider-section/ProviderModelMetadataDialog.js";
+import type { ModelConfigObject } from "@zcode/provider";
 import {
   ProviderApiFormatSelect,
   resolveProviderConnectionApiFormatDisplayLabel,
@@ -332,6 +333,59 @@ export function ProviderApiKeySection({
   );
 }
 
+function modelsDevInputFormat(input: ReadonlyArray<"text" | "image" | "pdf">): {
+  supportsText: true;
+  supportsImage: boolean;
+  supportsVideo: false;
+  supportsAudio: false;
+  supportsPdf: boolean;
+} {
+  return {
+    supportsText: true,
+    supportsImage: input.includes("image"),
+    supportsVideo: false,
+    supportsAudio: false,
+    supportsPdf: input.includes("pdf"),
+  };
+}
+
+/**
+ * models.dev 命中的元数据 → Personal Model Overlay。
+ * 只写目录确实给出的事实，缺项一律不覆盖，避免用猜测盖掉内置规则或用户既有配置。
+ * 目录里没有「原生联网搜索 / 对话中系统消息」，这两项保持继承。
+ */
+function modelsDevPresetToPersonalConfig(
+  preset: ModelsDevModelMetadata["preset"],
+): ModelConfigObject | undefined {
+  const properties: Record<string, unknown> = {};
+  if (preset.contextWindow != null) properties.contextWindow = preset.contextWindow;
+  if (preset.input != null) properties.inputFormat = modelsDevInputFormat(preset.input);
+  if (preset.structuredOutput != null) {
+    properties.supportsJsonSchemaOutput = preset.structuredOutput;
+  }
+  const optionSpecs: Record<string, unknown> = {};
+  if (preset.maxTokens != null) optionSpecs.maxOutputTokens = { max: preset.maxTokens };
+  if (preset.reasoningLevels != null && preset.reasoningLevels.length > 0) {
+    optionSpecs.reasoningLevel = { values: [...preset.reasoningLevels] };
+  }
+  if (Object.keys(properties).length === 0 && Object.keys(optionSpecs).length === 0) {
+    return undefined;
+  }
+  return {
+    ...(Object.keys(properties).length > 0 ? { properties } : {}),
+    ...(Object.keys(optionSpecs).length > 0 ? { optionSpecs } : {}),
+  } as ModelConfigObject;
+}
+
+/**
+ * 内置规则只命中兜底 `.*`（200K + 不支持图片）时说明内置表没覆盖这代模型，
+ * 此时才用 models.dev 补齐；命中内置专条（或站点专条）时保留更准确的内置口径。
+ */
+function isFallbackOnlyModelConfig(config: ModelConfigObject): boolean {
+  const properties = config.properties ?? {};
+  return properties.contextWindow === 200000 && properties.inputFormat?.supportsImage !== true;
+}
+
 function createEmptyModel(): ProviderSettingsFormModel {
   return {
     kind: "candidate",
@@ -427,6 +481,7 @@ export function ProviderModelsSection({
     (preset: ModelsDevModelMetadata["preset"] | null | undefined) => {
       if (!preset) return;
       const patch: Partial<ProviderModelDraftValues> = {};
+      const overriddenFields = new Set(editor.draft.overriddenFieldsValue ?? []);
       if (preset.contextWindow !== undefined && preset.contextWindow !== null) {
         patch.contextWindowValue = String(preset.contextWindow);
       }
@@ -434,15 +489,21 @@ export function ProviderModelsSection({
         patch.maxOutputTokensValue = String(preset.maxTokens);
       }
       if (preset.input !== undefined && preset.input !== null) {
-        patch.inputFormatValue = {
-          supportsText: true,
-          supportsImage: preset.input.includes("image"),
-          supportsVideo: false,
-          supportsAudio: false,
-          supportsPdf: false,
-        };
+        patch.inputFormatValue = modelsDevInputFormat(preset.input);
+        overriddenFields.add("inputFormatValue.supportsImage");
+        overriddenFields.add("inputFormatValue.supportsPdf");
+      }
+      // 结构化输出与推理等级也要跟着写入，否则只能填上下文/模态，能力与档位仍是兜底值。
+      if (preset.structuredOutput !== undefined && preset.structuredOutput !== null) {
+        patch.supportsJsonSchemaOutputValue = preset.structuredOutput;
+        overriddenFields.add("supportsJsonSchemaOutputValue");
+      }
+      if (preset.reasoningLevels != null && preset.reasoningLevels.length > 0) {
+        patch.reasoningLevelValuesValue = [...preset.reasoningLevels];
+        overriddenFields.add("reasoningLevelValuesValue");
       }
       if (Object.keys(patch).length === 0) return;
+      patch.overriddenFieldsValue = [...overriddenFields];
       editor.change(patch);
     },
     [editor],
@@ -461,6 +522,12 @@ export function ProviderModelsSection({
           : { contextWindow: candidate.contextWindow }),
         ...(candidate.maxTokens === undefined ? {} : { maxTokens: candidate.maxTokens }),
         ...(candidate.input === undefined ? {} : { input: candidate.input }),
+        ...(candidate.structuredOutput === undefined
+          ? {}
+          : { structuredOutput: candidate.structuredOutput }),
+        ...(candidate.reasoningLevels === undefined
+          ? {}
+          : { reasoningLevels: candidate.reasoningLevels }),
       });
     },
     [applyModelsDevPreset],
@@ -524,19 +591,38 @@ export function ProviderModelsSection({
   }, [editor, onAddModel]);
   const handleAddDiscoveredModels = useCallback(
     async (modelIds: readonly string[]) => {
-      // 逐条复用 addPersonalModel 唯一写边界；上游 ID 只是候选事实，配置由智能配置解析。
+      // 逐条复用 addPersonalModel 唯一写边界。上游 /models 只给 ID，这里先用 models.dev 解析元数据：
+      // 只有内置规则只命中兜底（200K/无图片）时才落成 Personal Overlay 自动补齐，
+      // 命中内置专条或站点专条时保留更准确的内置口径。
       for (const modelId of modelIds) {
         const trimmed = modelId.trim();
         if (!trimmed) continue;
+        let personalConfig: ModelConfigObject = {};
+        try {
+          const resolution = await providerSettingsService.resolveModelConfig({
+            providerId,
+            modelId: trimmed,
+          });
+          if (isFallbackOnlyModelConfig(resolution.effectiveConfig)) {
+            const metadata = await providerSettingsService.resolveModelsDevModelMetadata({
+              modelId: trimmed,
+              providerId,
+              ...(providerApiBaseUrl?.trim() ? { baseUrl: providerApiBaseUrl.trim() } : {}),
+            });
+            personalConfig = modelsDevPresetToPersonalConfig(metadata.preset) ?? {};
+          }
+        } catch {
+          // 目录或解析不可用时退回原有「智能配置」行为，不能让批量添加整体失败。
+        }
         await onAddModel({
           ...createEmptyModel(),
           modelId: trimmed,
-          personalConfig: {},
+          personalConfig,
           useRecommendedConfig: true,
         });
       }
     },
-    [onAddModel],
+    [onAddModel, providerSettingsService, providerId, providerApiBaseUrl],
   );
   const addDraftErrorMessage = addDraftErrorField
     ? intl.formatMessage({

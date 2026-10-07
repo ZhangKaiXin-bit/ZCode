@@ -244,6 +244,8 @@ function toCandidate(entry: ModelsDevCatalogEntry): ModelsDevCatalogCandidate {
     ...(entry.maxTokens === undefined ? {} : { maxTokens: entry.maxTokens }),
     ...(entry.input === undefined ? {} : { input: entry.input }),
     ...(entry.reasoning === undefined ? {} : { reasoning: entry.reasoning }),
+    ...(entry.structuredOutput === undefined ? {} : { structuredOutput: entry.structuredOutput }),
+    ...(entry.reasoningLevels === undefined ? {} : { reasoningLevels: entry.reasoningLevels }),
     ...(entry.cost === undefined ? {} : { cost: entry.cost }),
   };
 }
@@ -277,6 +279,12 @@ function resolveMatchedEntriesMetadata(
         ...(primary.name ? { name: primary.name } : {}),
         ...(primary.reasoning === undefined ? {} : { reasoning: primary.reasoning }),
         ...(primary.input === undefined ? {} : { input: primary.input }),
+        ...(primary.structuredOutput === undefined
+          ? {}
+          : { structuredOutput: primary.structuredOutput }),
+        ...(primary.reasoningLevels === undefined
+          ? {}
+          : { reasoningLevels: primary.reasoningLevels }),
         ...(primary.contextWindow === undefined ? {} : { contextWindow: primary.contextWindow }),
         ...(primary.maxTokens === undefined ? {} : { maxTokens: primary.maxTokens }),
       }
@@ -287,6 +295,12 @@ function resolveMatchedEntriesMetadata(
             ? {}
             : { reasoning: exactMatches[0]!.reasoning }),
           ...(exactMatches[0]!.input === undefined ? {} : { input: exactMatches[0]!.input }),
+          ...(exactMatches[0]!.structuredOutput === undefined
+            ? {}
+            : { structuredOutput: exactMatches[0]!.structuredOutput }),
+          ...(exactMatches[0]!.reasoningLevels === undefined
+            ? {}
+            : { reasoningLevels: exactMatches[0]!.reasoningLevels }),
           ...(exactMatches[0]!.contextWindow === undefined
             ? {}
             : { contextWindow: exactMatches[0]!.contextWindow }),
@@ -300,6 +314,8 @@ function resolveMatchedEntriesMetadata(
             : {}),
           ...consensusReasoning(exactMatches),
           ...consensusInput(exactMatches),
+          ...consensusStructuredOutput(exactMatches),
+          ...consensusReasoningLevels(exactMatches),
           ...consensusNumber(exactMatches, (entry) => entry.contextWindow, "contextWindow"),
           ...consensusNumber(exactMatches, (entry) => entry.maxTokens, "maxTokens"),
         };
@@ -466,14 +482,43 @@ function consensusInput(
 ): Partial<ModelsDevModelMetadata["preset"]> {
   const values = exactMatches
     .map((entry) => entry.input)
-    .filter((value): value is ReadonlyArray<"text" | "image"> => value !== null && value !== undefined)
+    .filter(
+      (value): value is ReadonlyArray<"text" | "image" | "pdf"> =>
+        value !== null && value !== undefined,
+    )
     .map((value) => [...value].sort().join(","));
   const majority = majorityString(values);
   if (majority === undefined) return {};
-  const input = majority.split(",").filter((item) => item === "text" || item === "image") as Array<
-    "text" | "image"
+  const input = majority
+    .split(",")
+    .filter((item) => item === "text" || item === "image" || item === "pdf") as Array<
+    "text" | "image" | "pdf"
   >;
   return input.length > 0 ? { input } : {};
+}
+
+function consensusStructuredOutput(
+  exactMatches: readonly ModelsDevCatalogEntry[],
+): Partial<ModelsDevModelMetadata["preset"]> {
+  const values = exactMatches
+    .map((entry) => entry.structuredOutput)
+    .filter((value): value is boolean => value !== null && value !== undefined)
+    .map(String);
+  const majority = majorityString(values);
+  return majority === undefined ? {} : { structuredOutput: majority === "true" };
+}
+
+function consensusReasoningLevels(
+  exactMatches: readonly ModelsDevCatalogEntry[],
+): Partial<ModelsDevModelMetadata["preset"]> {
+  const values = exactMatches
+    .map((entry) => entry.reasoningLevels)
+    .filter((value): value is ReadonlyArray<string> => value != null && value.length > 0)
+    .map((value) => [...value].join(","));
+  const majority = majorityString(values);
+  if (majority === undefined) return {};
+  const levels = majority.split(",").filter((level) => level.length > 0);
+  return levels.length > 0 ? { reasoningLevels: levels } : {};
 }
 
 function consensusNumber(
