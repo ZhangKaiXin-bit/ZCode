@@ -38,7 +38,7 @@ export function ProviderModelsDiscoveryDialog({
   existingModelIds: readonly string[];
   providerSettingsService?: IProviderSettingsService;
   onOpenChange: (open: boolean) => void;
-  onAddModels: (modelIds: readonly string[]) => Promise<void> | void;
+  onAddModels: (models: readonly DiscoveredProviderModel[]) => Promise<void> | void;
 }) {
   const { intl } = useZCodeIntl();
   const [state, setState] = useState<{
@@ -110,11 +110,12 @@ export function ProviderModelsDiscoveryDialog({
   };
 
   const commitAdd = async () => {
-    const modelIds = [...selected];
-    if (modelIds.length === 0) return;
+    // 连同上游自报的元数据一起交给添加流程：上下文/最大输出/模态/推理档位优先用上游值。
+    const models = state.models.filter((model) => selected.has(model.id));
+    if (models.length === 0) return;
     setAdding(true);
     try {
-      await onAddModels(modelIds);
+      await onAddModels(models);
       onOpenChange(false);
     } finally {
       setAdding(false);

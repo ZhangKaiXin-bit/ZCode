@@ -41,6 +41,61 @@ test("endpoint: 非法 URL 抛错", () => {
   assert.throws(() => buildModelsEndpointUrl("not-a-url", "openai-chat-completions"));
 });
 
+test("discover: 保留上游自报的上下文/最大输出/模态/推理档位", async () => {
+  // 形态取自 WorkBuddy 网关真实响应：自建网关会声明自己的参数（可能与官方不同）。
+  const discovery = new ProviderModelsDiscovery({
+    request: async () =>
+      jsonResponse({
+        data: [
+          {
+            id: "cn:hy4-preview",
+            name: "Hy4 preview",
+            context_length: 1000000,
+            max_allowed_size: 1000000,
+            max_output_tokens: 64000,
+            supports_images: true,
+            supports_reasoning: true,
+            supports_tool_call: true,
+            reasoning_supported_efforts: ["high"],
+          },
+          {
+            id: "cn:no-reasoning",
+            name: "No Reasoning",
+            context_window: 131072,
+            max_tokens: "8192",
+            supports_vision: false,
+            supports_reasoning: false,
+          },
+          // 脏数据：非法数值/类型不应写入，交给上层回退。
+          { id: "cn:bad-values", context_length: -1, max_output_tokens: "abc", supports_images: "yes" },
+        ],
+      }),
+  });
+  const result = await discovery.discover({
+    baseUrl: "http://192.168.5.2:7863/v1",
+    apiType: "openai-chat-completions",
+  });
+  const hy4 = result.models.find((model) => model.id === "cn:hy4-preview");
+  assert.equal(hy4?.contextWindow, 1000000);
+  assert.equal(hy4?.maxOutputTokens, 64000);
+  assert.equal(hy4?.supportsImages, true);
+  assert.equal(hy4?.supportsReasoning, true);
+  assert.deepEqual(hy4?.reasoningLevels, ["high"]);
+  assert.equal(hy4?.name, "Hy4 preview");
+
+  const plain = result.models.find((model) => model.id === "cn:no-reasoning");
+  assert.equal(plain?.contextWindow, 131072);
+  assert.equal(plain?.maxOutputTokens, 8192);
+  assert.equal(plain?.supportsImages, false);
+  assert.equal(plain?.supportsReasoning, false);
+  assert.equal(plain?.reasoningLevels, undefined);
+
+  const bad = result.models.find((model) => model.id === "cn:bad-values");
+  assert.equal(bad?.contextWindow, undefined);
+  assert.equal(bad?.maxOutputTokens, undefined);
+  assert.equal(bad?.supportsImages, undefined);
+});
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,

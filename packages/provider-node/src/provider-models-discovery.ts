@@ -165,5 +165,81 @@ function parseModelItem(item: unknown): DiscoveredProviderModel | undefined {
       : typeof record.name === "string" && record.name.trim()
         ? record.name.trim()
         : undefined;
-  return name ? { id, name } : { id };
+  // 上游自报的元数据：不同网关字段名不统一，这里按常见别名归一；缺失或非法一律不写，
+  // 交给上层的 models.dev / 内置规则回退，避免把脏值写进配置。
+  const contextWindow = pickPositiveInteger(record, [
+    "context_length",
+    "context_window",
+    "max_context_length",
+    "max_allowed_size",
+  ]);
+  const maxOutputTokens = pickPositiveInteger(record, [
+    "max_output_tokens",
+    "max_tokens",
+    "max_completion_tokens",
+  ]);
+  const supportsImages = pickBoolean(record, [
+    "supports_images",
+    "supportsImages",
+    "supports_vision",
+    "vision",
+  ]);
+  const supportsReasoning = pickBoolean(record, ["supports_reasoning", "supportsReasoning"]);
+  const reasoningLevels = pickStringArray(record, [
+    "reasoning_supported_efforts",
+    "reasoningSupportedEfforts",
+    "reasoning_efforts",
+  ]);
+  return {
+    id,
+    ...(name ? { name } : {}),
+    ...(contextWindow === undefined ? {} : { contextWindow }),
+    ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+    ...(supportsImages === undefined ? {} : { supportsImages }),
+    ...(supportsReasoning === undefined ? {} : { supportsReasoning }),
+    ...(reasoningLevels === undefined ? {} : { reasoningLevels }),
+  };
+}
+
+function pickPositiveInteger(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+): number | undefined {
+  for (const key of keys) {
+    const raw = record[key];
+    const value = typeof raw === "string" ? Number(raw) : raw;
+    if (typeof value === "number" && Number.isInteger(value) && value > 0) return value;
+  }
+  return undefined;
+}
+
+function pickBoolean(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+): boolean | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "boolean") return value;
+  }
+  return undefined;
+}
+
+function pickStringArray(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+): string[] | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (!Array.isArray(value)) continue;
+    const items = [
+      ...new Set(
+        value
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0),
+      ),
+    ];
+    if (items.length > 0) return items;
+  }
+  return undefined;
 }

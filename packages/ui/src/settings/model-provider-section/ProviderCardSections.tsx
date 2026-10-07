@@ -12,6 +12,7 @@ import type {
   ProviderSettingsFormModel,
 } from "@/lib/providerSettingsFormTypes.js";
 import type {
+  DiscoveredProviderModel,
   ModelConnectivityResult,
   ModelsDevCatalogCandidate,
   ModelsDevModelMetadata,
@@ -23,6 +24,7 @@ import {
   TID_MODEL_PROVIDER_MODEL_INPUT,
   TID_MODEL_PROVIDER_NAME_EDIT_BUTTON,
   TID_MODEL_PROVIDER_NAME_INPUT,
+  buildProviderModelOverlay,
   testId,
 } from "@zcode/shared";
 import { InfoIcon, ListPlusIcon, LockKeyholeIcon, Plus, Pencil, Trash2, MoreHorizontal } from "lucide-react";
@@ -349,43 +351,6 @@ function modelsDevInputFormat(input: ReadonlyArray<"text" | "image" | "pdf">): {
   };
 }
 
-/**
- * models.dev 命中的元数据 → Personal Model Overlay。
- * 只写目录确实给出的事实，缺项一律不覆盖，避免用猜测盖掉内置规则或用户既有配置。
- * 目录里没有「原生联网搜索 / 对话中系统消息」，这两项保持继承。
- */
-function modelsDevPresetToPersonalConfig(
-  preset: ModelsDevModelMetadata["preset"],
-): ModelConfigObject | undefined {
-  const properties: Record<string, unknown> = {};
-  if (preset.contextWindow != null) properties.contextWindow = preset.contextWindow;
-  if (preset.input != null) properties.inputFormat = modelsDevInputFormat(preset.input);
-  if (preset.structuredOutput != null) {
-    properties.supportsJsonSchemaOutput = preset.structuredOutput;
-  }
-  const optionSpecs: Record<string, unknown> = {};
-  if (preset.maxTokens != null) optionSpecs.maxOutputTokens = { max: preset.maxTokens };
-  if (preset.reasoningLevels != null && preset.reasoningLevels.length > 0) {
-    optionSpecs.reasoningLevel = { values: [...preset.reasoningLevels] };
-  }
-  if (Object.keys(properties).length === 0 && Object.keys(optionSpecs).length === 0) {
-    return undefined;
-  }
-  return {
-    ...(Object.keys(properties).length > 0 ? { properties } : {}),
-    ...(Object.keys(optionSpecs).length > 0 ? { optionSpecs } : {}),
-  } as ModelConfigObject;
-}
-
-/**
- * 内置规则只命中兜底 `.*`（200K + 不支持图片）时说明内置表没覆盖这代模型，
- * 此时才用 models.dev 补齐；命中内置专条（或站点专条）时保留更准确的内置口径。
- */
-function isFallbackOnlyModelConfig(config: ModelConfigObject): boolean {
-  const properties = config.properties ?? {};
-  return properties.contextWindow === 200000 && properties.inputFormat?.supportsImage !== true;
-}
-
 function createEmptyModel(): ProviderSettingsFormModel {
   return {
     kind: "candidate",
@@ -590,34 +555,29 @@ export function ProviderModelsSection({
     }
   }, [editor, onAddModel]);
   const handleAddDiscoveredModels = useCallback(
-    async (modelIds: readonly string[]) => {
-      // 逐条复用 addPersonalModel 唯一写边界。上游 /models 只给 ID，这里先用 models.dev 解析元数据：
-      // 只有内置规则只命中兜底（200K/无图片）时才落成 Personal Overlay 自动补齐，
-      // 命中内置专条或站点专条时保留更准确的内置口径。
-      for (const modelId of modelIds) {
-        const trimmed = modelId.trim();
+    async (discovered: readonly DiscoveredProviderModel[]) => {
+      // 逐条复用 addPersonalModel 唯一写边界。元数据优先级：上游自报 → models.dev 目录 → 内置规则。
+      // 自建/中转网关常把官方模型换成自部署版本，参数与官方并不一致，所以上游 /models 的值优先；
+      // 上游没给的字段才用目录共识补，仍缺的交给「智能配置」的内置规则。
+      for (const model of discovered) {
+        const trimmed = model.id.trim();
         if (!trimmed) continue;
-        let personalConfig: ModelConfigObject = {};
+        let modelsDevPreset: ModelsDevModelMetadata["preset"] | undefined;
         try {
-          const resolution = await providerSettingsService.resolveModelConfig({
-            providerId,
+          const metadata = await providerSettingsService.resolveModelsDevModelMetadata({
             modelId: trimmed,
+            providerId,
+            ...(providerApiBaseUrl?.trim() ? { baseUrl: providerApiBaseUrl.trim() } : {}),
           });
-          if (isFallbackOnlyModelConfig(resolution.effectiveConfig)) {
-            const metadata = await providerSettingsService.resolveModelsDevModelMetadata({
-              modelId: trimmed,
-              providerId,
-              ...(providerApiBaseUrl?.trim() ? { baseUrl: providerApiBaseUrl.trim() } : {}),
-            });
-            personalConfig = modelsDevPresetToPersonalConfig(metadata.preset) ?? {};
-          }
+          modelsDevPreset = metadata.preset;
         } catch {
-          // 目录或解析不可用时退回原有「智能配置」行为，不能让批量添加整体失败。
+          // 目录不可用时只用上游自报值，不能让批量添加整体失败。
         }
+        const overlay = buildProviderModelOverlay(model, modelsDevPreset);
         await onAddModel({
           ...createEmptyModel(),
           modelId: trimmed,
-          personalConfig,
+          personalConfig: (overlay ?? {}) as ModelConfigObject,
           useRecommendedConfig: true,
         });
       }

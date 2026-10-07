@@ -178,6 +178,15 @@ export interface DiscoverProviderModelsInput {
 export interface DiscoveredProviderModel {
   readonly id: string;
   readonly name?: string;
+  /**
+   * 上游 /models 自报的元数据（字段名各网关不一，解析时已归一）。
+   * 自建/中转网关常把官方模型换成自部署版本，参数与官方不同，因此这些字段优先级最高。
+   */
+  readonly contextWindow?: number;
+  readonly maxOutputTokens?: number;
+  readonly supportsImages?: boolean;
+  readonly supportsReasoning?: boolean;
+  readonly reasoningLevels?: readonly string[];
 }
 
 export interface DiscoverProviderModelsResult {
