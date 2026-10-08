@@ -22,6 +22,7 @@ import {
   resolveModelProviderFamilySpecByProviderId,
   TID_V4_MODEL_CONFIG,
   TID_V4_COMPOSER_INPUT,
+  TID_V4_COMPOSER_OPTIMIZE_PROMPT,
   ZCODE_AGENT_PROVIDER,
   type ProviderFamilyConnectionSelection,
   type ProviderFamilyConnectionSelectionSettings,
@@ -78,6 +79,19 @@ import {
 } from "@/lib/codingPlanFunnelTelemetry.js";
 import { useShortcutCommandLabel } from "@/shortcuts/useShortcutBindings.js";
 import { logger } from "@/logger.js";
+import { useZCodeAgentService } from "@/hooks/useZCodeAgentService.js";
+import { LoaderCircle, Sparkles } from "lucide-react";
+import type { ModelSelection } from "@zcode/shared/model-selection";
+
+// 提示词优化是一次性改写任务：只输出改写后的提示词本身，不改语义、不解释、不加需求。
+const PROMPT_OPTIMIZE_SYSTEM_PROMPT = `Rewrite the user's draft prompt into a clearer, more actionable prompt for a coding agent.
+
+Rules:
+- Preserve the original intent, language, and every concrete detail (paths, names, versions, constraints).
+- State the goal, the relevant context, and the expected outcome explicitly.
+- Do not add requirements the user did not ask for.
+- Never answer the request, explain your rewrite, or use markdown fences.
+- Return only the rewritten prompt as plain text.`;
 import { useCodingPlanUpgradeDialog } from "@/settings/CodingPlanUpgradeDialogProvider.js";
 import { useCodingPlanEntitlements } from "@/settings/model-provider-section/useCodingPlanEntitlements.js";
 import { decodeCustomModelValue, encodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
@@ -359,6 +373,10 @@ export interface V4ComposerToolbarProps {
     sourceModel: ModelSelectionSource | null,
   ) => Promise<void> | void;
   onSendCompressionCommand?: (command: string) => void;
+  /** 读取当前草稿原文（由 Composer owner 提供，返回 canonical markdown）。 */
+  getDraftText?: () => string;
+  /** 用优化结果整体替换草稿；撤销由用户自行控制（暂不提供一键还原）。 */
+  replaceDraftText?: (text: string) => void;
 }
 
 /** 模型 / 思考深度 / context usage 簇（渲染在发送键左侧，与旧 UI 同位）。 */
@@ -380,8 +398,12 @@ function V4ComposerModelControlsImpl({
   onSelectThought,
   onSendCompressionCommand,
   onRecoverCustomModelSelection,
+  getDraftText,
+  replaceDraftText,
 }: V4ComposerToolbarProps) {
   const { intl, locale } = useZCodeIntl();
+  const zcodeAgentService = useZCodeAgentService(workspacePath, undefined, workspaceIdentity);
+  const [optimizingPrompt, setOptimizingPrompt] = useState(false);
   const { openCodingPlanUpgrade } = useCodingPlanUpgradeDialog();
   const displayProvider = provider ?? ZCODE_AGENT_PROVIDER;
   // 配置面读取：workspace 缺省目录（taskId=null），不读旧会话态。
@@ -912,6 +934,48 @@ function V4ComposerModelControlsImpl({
     };
   }, [draftModelThoughtOption, effectiveConfig]);
 
+  // 优化提示词用当前会话模型；推理档位取该模型列表里的最低档（通常就是关闭/最低思考），
+  // 模型不支持关闭时自然落到它支持的最低档，避免为一次改写付高思考成本。
+  const optimizePromptSelection = useMemo<ModelSelection | null>(() => {
+    if (!effectiveConfig?.provider || !effectiveConfig?.model) return null;
+    const lowestLevel = thoughtOption?.options?.[0]?.value;
+    return {
+      providerId: effectiveConfig.provider,
+      modelId: effectiveConfig.model,
+      ...(lowestLevel ? { options: { reasoningLevel: lowestLevel } } : {}),
+    };
+  }, [effectiveConfig?.provider, effectiveConfig?.model, thoughtOption]);
+
+  const handleOptimizePrompt = useCallback(async () => {
+    if (!getDraftText || !replaceDraftText || optimizingPrompt) return;
+    const draft = getDraftText().trim();
+    if (!draft || !optimizePromptSelection) return;
+    setOptimizingPrompt(true);
+    try {
+      const result = await zcodeAgentService.generateWorkspaceText({
+        workspacePath,
+        ...(workspaceIdentity ? { workspaceIdentity } : {}),
+        selection: optimizePromptSelection,
+        messages: [
+          { role: "system", content: PROMPT_OPTIMIZE_SYSTEM_PROMPT },
+          { role: "user", content: draft },
+        ],
+        querySource: "prompt_optimization",
+        maxOutputTokens: 2048,
+      });
+      const optimized = result.text.trim();
+      if (optimized) replaceDraftText(optimized);
+    } catch (error) {
+      logger.warn("[v4-toolbar] 优化提示词失败", {
+        providerId: optimizePromptSelection.providerId,
+        modelId: optimizePromptSelection.modelId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setOptimizingPrompt(false);
+    }
+  }, [getDraftText, replaceDraftText, optimizingPrompt, optimizePromptSelection, zcodeAgentService]);
+
   const handleThoughtValueChange = useCallback(
     (value: string) => {
       if (!effectiveConfig) return;
@@ -1087,6 +1151,31 @@ function V4ComposerModelControlsImpl({
           onOpenChange={handleThoughtPickerOpenChange}
           restoreFocusSelector={V4_COMPOSER_INPUT_SELECTOR}
         />
+      ) : null}
+      {getDraftText && replaceDraftText ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="shrink-0"
+          data-testid={TID_V4_COMPOSER_OPTIMIZE_PROMPT}
+          disabled={disabled || recoveryPending || optimizingPrompt || !optimizePromptSelection}
+          title={intl.formatMessage({
+            id: optimizingPrompt
+              ? "chat.toolbar.optimizePromptPending"
+              : "chat.toolbar.optimizePromptTitle",
+          })}
+          aria-label={intl.formatMessage({ id: "chat.toolbar.optimizePrompt" })}
+          onClick={() => {
+            void handleOptimizePrompt();
+          }}
+        >
+          {optimizingPrompt ? (
+            <LoaderCircle className="size-4 animate-spin" />
+          ) : (
+            <Sparkles className="size-4" />
+          )}
+        </Button>
       ) : null}
     </>
   );

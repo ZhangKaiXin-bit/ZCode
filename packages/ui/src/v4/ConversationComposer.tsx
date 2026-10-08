@@ -617,6 +617,22 @@ function ConversationComposerImpl({
     },
     [onTextChange, workspaceIdentity, workspacePath],
   );
+  // 「自动优化提示词」需要读写草稿原文：读走 Lexical canonical markdown，写回走同一条
+  // updateText 路径，保证草稿持久化/revision 与手动输入一致。
+  const getDraftText = useCallback(
+    () => inputApiRef.current?.getMarkdown() ?? textRef.current,
+    [],
+  );
+  const replaceDraftText = useCallback(
+    (next: string) => {
+      const api = inputApiRef.current;
+      if (!api) return;
+      api.setText(next);
+      updateText(next);
+      requestAnimationFrame(() => inputApiRef.current?.focus());
+    },
+    [updateText],
+  );
 
   // ── 附件全链路（选择/粘贴/拖拽/画板/预传/门禁）──
   const attachmentsApi = useComposerAttachments({
@@ -2059,6 +2075,8 @@ function ConversationComposerImpl({
             onSwitchMode={onSwitchMode}
             onRecoverCustomModelSelection={onRecoverCustomModelSelection}
             onSendCompressionCommand={onSendCompressionCommand}
+            getDraftText={getDraftText}
+            replaceDraftText={replaceDraftText}
           />
         </span>
         {showStopControl ? (
