@@ -2989,6 +2989,42 @@ export function createZCodeTaskServiceAdapter(
       }
     },
 
+    async generateTaskTitle(params): Promise<void> {
+      logger.info(undefined, "[ZCodeTaskService] generateTaskTitle start", {
+        taskId: params.taskId,
+        workspacePath: params.workspacePath,
+        workspaceIdentity: params.workspaceIdentity,
+        workspaceKey: resolveWorkspaceKey(params),
+      });
+      try {
+        // 标题由 core 侧 sidecar 生成，结果经 SessionTitleUpdated 事件回投影；
+        // 这里只负责下发命令并等 ACK，不本地写 tasks-index（避免与事件竞态产生两份标题）。
+        const ack = await options.zcodeAgentService.sendConversationCommandV4({
+          workspacePath: params.workspacePath,
+          workspaceIdentity: params.workspaceIdentity,
+          envelope: createHostCommandEnvelope({
+            type: "generateSessionTitle",
+            sessionId: params.taskId,
+            payload: {},
+          }),
+        });
+        assertV4CommandAckOk("generateSessionTitle", ack, `session=${params.taskId}`);
+        logger.info(undefined, "[ZCodeTaskService] generateTaskTitle ack ok", {
+          taskId: params.taskId,
+          workspaceKey: resolveWorkspaceKey(params),
+        });
+      } catch (error) {
+        logger.error(undefined, "[ZCodeTaskService] generateTaskTitle failed", {
+          taskId: params.taskId,
+          workspacePath: params.workspacePath,
+          workspaceIdentity: params.workspaceIdentity,
+          workspaceKey: resolveWorkspaceKey(params),
+          message: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    },
+
     async setTaskPinned(params): Promise<ZCodeTaskMeta> {
       setOverlay(params, { pinned: params.pinned });
       const meta = await updateIndexedTaskState(params, {

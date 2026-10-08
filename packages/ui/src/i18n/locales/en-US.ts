@@ -1876,6 +1876,8 @@ const enUS: Record<string, string> = {
   "v4Pane.splitRight": "Split right",
   "v4Pane.renamePlaceholder": "Rename session…",
   "v4Pane.renameSession": "Rename session",
+  "v4Pane.generateTitle": "Generate title",
+  "v4Pane.generateTitleTitle": "Regenerate the session title with the model",
   "v4Pane.deleteSession": "Delete session",
   "v4Pane.splitRightTitle": "Split a new pane to the right (new session)",
   "v4Pane.splitDown": "Split down",

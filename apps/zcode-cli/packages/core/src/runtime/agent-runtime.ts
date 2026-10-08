@@ -365,6 +365,8 @@ export interface AgentRuntime {
   ): void;
   /** renameSession：用户显式重命名（titleSource=custom，发 SessionTitleUpdated）。 */
   setCustomSessionTitle(input: { title: string; traceContext: TraceContext }): Promise<void>;
+  /** generateSessionTitle：会话工具栏「生成标题」，用模型重新生成标题（可覆盖 custom）。 */
+  regenerateSessionTitle(input: { traceContext: TraceContext }): Promise<void>;
   maybeStartGoalSummaryTitleGeneration(
     input: string,
     targetID: string,

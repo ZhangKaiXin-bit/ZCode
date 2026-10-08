@@ -242,6 +242,10 @@ export const commandPayloadSchemas = {
   // 词表见 workflow-run-settings-command.ts；能力缺席 → V4CapabilityUnsupportedError。
   amendWorkflowRunSettings: amendWorkflowRunSettingsPayloadSchema,
   renameSession: z.object({ title: z.string() }),
+  // generateSessionTitle：用户显式要求重新生成会话标题（会话工具栏「生成标题」）。
+  // 无载荷：标题 sidecar 用会话内首条可见用户消息作素材，结果经 SessionTitleUpdated
+  // （source=generated）回到 v4 投影；语义与 renameSession 的 custom 标题互不覆盖约束见 core。
+  generateSessionTitle: z.object({}),
   deleteSession: z.object({}),
   discardSharedContext: z.object({ contextId: z.string().trim().min(1) }).strict(),
 } as const;

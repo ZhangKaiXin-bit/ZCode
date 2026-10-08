@@ -662,6 +662,16 @@ export interface IZCodeTaskService {
     title: string;
   }): Promise<ZCodeTaskMeta>;
 
+  /**
+   * 让 agent 用模型重新生成会话标题（会话工具栏「生成标题」）。
+   * 标题经 SessionTitleUpdated 事件回到投影，本方法只等命令 ACK。
+   */
+  generateTaskTitle(params: {
+    taskId: string;
+    workspacePath: string;
+    workspaceIdentity?: string;
+  }): Promise<void>;
+
   /** 更新 task 置顶状态 */
   setTaskPinned(params: {
     taskId: string;

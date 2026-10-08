@@ -152,6 +152,22 @@ async function renameSession(
 }
 
 /**
+ * generateSessionTitle：会话工具栏「生成标题」→ core runtime 用模型重新生成标题。
+ * - 素材与自动标题一致（会话内首条可见用户消息），复用同一个标题 sidecar。
+ * - 用户显式动作允许覆盖 custom 标题；写回与事件（SessionTitleUpdated, source=generated）
+ *   全部由 core 完成，handler 不做本地写，投影与其他 v4 消费者照常收口。
+ * - 素材缺失（空会话）时 core 静默跳过，ACK 仍为成功：按钮不是写入操作，无需失败语义。
+ */
+async function generateSessionTitle(
+  host: V4CommandCoreHost,
+  envelope: CommandEnvelope,
+): Promise<CommandResult | undefined> {
+  const record = requireRecord(host, envelope.sessionId);
+  await record.app.runtime.regenerateSessionTitle({ traceContext: record.traceContext });
+  return undefined;
+}
+
+/**
  * deleteSession：语义 = closeSession（关闭 + 清理运行时资源），非真删 record——
  * message 库无删除 API，与旧协议路径一致（旧协议的“删除”同样只是 close，历史仍在库里，
  * 只是不再出现在活跃注册表）。
@@ -191,6 +207,7 @@ async function discardSharedContext(
 export const sessionMgmtHandlers = {
   createSession,
   renameSession,
+  generateSessionTitle,
   deleteSession,
   discardSharedContext,
 };

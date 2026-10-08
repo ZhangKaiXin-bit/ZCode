@@ -1,6 +1,7 @@
 import { SessionEventType, traceContextToLogContext } from "../deps.js";
 import type {
   MessageId,
+  MessagePart,
   MessageWithParts,
   ModelSelection,
   SessionInfo,
@@ -286,6 +287,53 @@ export async function setCustomSessionTitle(
   );
 }
 
+/**
+ * generateSessionTitle：会话工具栏「生成标题」的手动入口。
+ *
+ * 与自动标题共用同一个 sidecar（相同 system prompt / JSON 输出约束），素材取会话内首条
+ * 可见用户消息——自动路径用的也是首条 query，保持一致，避免长会话把标题带偏到最后一轮杂事。
+ * 这是用户显式动作，允许覆盖此前的 custom 标题（自动路径仍然跳过 custom）。
+ */
+export async function regenerateSessionTitle(
+  this: AgentRuntimeInternal,
+  input: { traceContext: TraceContext },
+): Promise<void> {
+  const seed = await resolveSessionTitleSeed.call(this);
+  if (!seed) {
+    this.logger?.debug("Session title generation skipped", {
+      ...traceContextToLogContext(input.traceContext),
+      event: "session_title_generation.skipped",
+      module: "core.runtime",
+      reason: "no_seed",
+    });
+    return;
+  }
+  const generated = await generateTitleCandidate.call(this, seed, {
+    querySource: SESSION_TITLE_QUERY_SOURCE,
+    traceContext: input.traceContext,
+  });
+  if (!generated) return;
+  await persistGeneratedSessionTitle.call(this, {
+    messageID: undefined,
+    modelSelection: generated.modelSelection,
+    title: generated.title,
+    traceContext: generated.traceContext,
+    allowCustomTitle: true,
+  });
+}
+
+async function resolveSessionTitleSeed(this: AgentRuntimeInternal): Promise<string | null> {
+  const messages = await this.sessionStore?.messages({ sessionID: this.sessionId });
+  const first = messages?.find((message) => isVisibleRealUserMessage(message));
+  if (!first) return null;
+  const text = first.parts
+    .filter((part): part is Extract<MessagePart, { type: "text" }> => part.type === "text")
+    .map((part) => part.text)
+    .join("\n")
+    .trim();
+  return text.length > 0 ? text : null;
+}
+
 async function persistGeneratedSessionTitle(
   this: AgentRuntimeInternal,
   input: {
@@ -293,13 +341,15 @@ async function persistGeneratedSessionTitle(
     modelSelection: ModelSelection;
     title: string;
     traceContext: TraceContext;
+    /** 手动「生成标题」时可以覆盖 custom 标题；自动路径保持 custom 短路。 */
+    allowCustomTitle?: boolean;
   },
 ): Promise<void> {
   // 标题 sidecar 现在会在首条 query 落库后并发启动，用户可能在 LLM 返回前编辑首条 query。
   // 写回前重新读取 session，避免旧 query 的 generated title 覆盖编辑后的首屏标题语义。
   const session = await getSessionForGeneratedTitle.call(this, input.messageID, input.traceContext);
   if (!session) return;
-  if (session.titleSource === "custom") {
+  if (session.titleSource === "custom" && input.allowCustomTitle !== true) {
     this.logger?.debug("Session title generation skipped", {
       ...traceContextToLogContext(input.traceContext),
       event: "session_title_generation.skipped",
@@ -311,7 +361,10 @@ async function persistGeneratedSessionTitle(
 
   const previousTitle = session.title;
   const updated = await this.sessionStore?.updateSession({
-    expectedTitleSources: GENERATED_TITLE_EXPECTED_SOURCES,
+    expectedTitleSources:
+      input.allowCustomTitle === true
+        ? [...GENERATED_TITLE_EXPECTED_SOURCES, "custom"]
+        : GENERATED_TITLE_EXPECTED_SOURCES,
     id: this.sessionId,
     title: input.title,
     ...(input.messageID ? { titleMessageID: input.messageID } : {}),
