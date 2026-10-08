@@ -4,15 +4,24 @@ import {
   Archive,
   Clock,
   CloudUpload,
+  LoaderCircle,
   ListTree,
   LoaderIcon,
   Moon,
   Pin,
+  Sparkles,
   Smartphone,
 } from "lucide-react";
 import { isCronTask, isOffPeakTask, type ZCodeTaskMeta } from "@zcode/shared";
-import { TID_TASK_ARCHIVE, TID_TASK_ITEM, testId } from "@zcode/shared";
+import {
+  TID_TASK_ARCHIVE,
+  TID_TASK_GENERATE_TITLE,
+  TID_TASK_ITEM,
+  testId,
+} from "@zcode/shared";
 import { Badge } from "@/components/ui/badge.js";
+import { useOptionalServices } from "@/hooks/useServices.js";
+import { logger } from "@/logger.js";
 import { Button } from "@/components/ui/button.js";
 import { cn } from "@/components/lib/utils.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
@@ -154,6 +163,11 @@ export const MemoTaskItem = memo(function TaskListItem({
 }: TaskListItemProps) {
   const [hoverActionsVisible, setHoverActionsVisible] = useState(false);
   const [focusActionsVisible, setFocusActionsVisible] = useState(false);
+  // 生成标题是模型调用（最长数十秒），行内给出进行中反馈，避免用户重复点击。
+  const [titleGenerating, setTitleGenerating] = useState(false);
+  // 侧边栏可能渲染在 ServiceProvider 之外（远端分区自带服务查找），这里用可选服务，
+  // 取不到就不渲染入口，避免把本地服务误用到远端 workspace。
+  const zcodeTaskService = useOptionalServices()?.zcodeTaskService ?? null;
   const [isHoverNone] = useState(
     () =>
       typeof window !== "undefined" &&
@@ -415,6 +429,48 @@ export const MemoTaskItem = memo(function TaskListItem({
     !hasPendingInteraction &&
     (shouldMountWorkspaceTaskActions || isArchiveConfirming);
   const archiveActionVisibilityClassName = isArchiveConfirming ? "flex" : "flex";
+  const shouldRenderGenerateTitleAction =
+    Boolean(zcodeTaskService) &&
+    !remoteSessionId &&
+    !workspaceActionsDisabled &&
+    !hasPendingInteraction &&
+    (shouldMountWorkspaceTaskActions || isMobileActive);
+  const generateTitleActionNode = shouldRenderGenerateTitleAction ? (
+    <TaskRowActionButton
+      label={
+        titleGenerating
+          ? intl.formatMessage({ id: "taskList.generatingTitle" })
+          : intl.formatMessage({ id: "taskList.generateTitle" })
+      }
+      showTooltip
+      disabledReason={titleGenerating ? intl.formatMessage({ id: "taskList.generatingTitle" }) : undefined}
+      testId={testId(TID_TASK_GENERATE_TITLE, task.taskId)}
+      onClick={(event) => {
+        if (!zcodeTaskService) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setTitleGenerating(true);
+        void zcodeTaskService
+          .generateTaskTitle({ taskId: task.taskId, workspacePath })
+          .catch((error: unknown) => {
+            logger.warn("[TaskListItem] 生成标题失败", {
+              taskId: task.taskId,
+              workspacePath,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          })
+          .finally(() => {
+            setTitleGenerating(false);
+          });
+      }}
+    >
+      {titleGenerating ? (
+        <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+      ) : (
+        <Sparkles className="h-3.5 w-3.5" />
+      )}
+    </TaskRowActionButton>
+  ) : null;
   const archiveActionNode = shouldRenderArchiveAction ? (
     /* 交互调整：任务进入“等待归档确认”后，右侧 hover 区不再显示归档按钮。
        否则一个 item 同时出现“待确认状态”和“可归档操作”，视觉重心会互相打架。 */
@@ -480,9 +536,10 @@ export const MemoTaskItem = memo(function TaskListItem({
       </span>
     ) : null;
   const taskActionGroupNode =
-    fileTreeActionNode || archiveActionNode ? (
+    fileTreeActionNode || generateTitleActionNode || archiveActionNode ? (
       <span data-task-row-actions="true" className="flex shrink-0 items-center gap-0.5">
         {fileTreeActionNode}
+        {generateTitleActionNode}
         {archiveActionNode}
       </span>
     ) : null;

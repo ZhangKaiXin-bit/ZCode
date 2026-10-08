@@ -556,28 +556,6 @@ export function SessionPane({
   const { conversationShareService, modelSelectionService, zcodeSessionService, zcodeTaskService } =
     useServices();
   const { intl, locale } = useZCodeIntl();
-  // 「生成标题」：命令下发到 agent 侧 sidecar 生成，标题经 SessionTitleUpdated 回流投影，
-  // 这里只维护进行中状态，不做乐观标题写入。
-  const [generatingTitle, setGeneratingTitle] = useState(false);
-  const handleGenerateTitle = useCallback(async () => {
-    if (!sessionId || generatingTitle) return;
-    setGeneratingTitle(true);
-    try {
-      await zcodeTaskService.generateTaskTitle({
-        taskId: sessionId,
-        workspacePath,
-        ...(workspaceIdentity ? { workspaceIdentity } : {}),
-      });
-    } catch (error) {
-      logger.warn("[SessionPane] 生成标题失败", {
-        taskId: sessionId,
-        workspacePath,
-        message: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      setGeneratingTitle(false);
-    }
-  }, [generatingTitle, sessionId, workspacePath, workspaceIdentity, zcodeTaskService]);
   const slashCommands = useSlashCommands(workspacePath, workspaceIdentity);
   const baseWorkspaceServices = useBaseWorkspaceServices();
   const workspaceHomePath = useWorkspaceHomePath({
@@ -4639,14 +4617,6 @@ export function SessionPane({
         onSplitDown={onSplitDown}
         onClosePane={onClosePane}
         workspaceBadge={workspaceBadge}
-        {...(sessionId
-          ? {
-              generatingTitle,
-              onGenerateTitle: () => {
-                void handleGenerateTitle();
-              },
-            }
-          : {})}
       />
 
       <div

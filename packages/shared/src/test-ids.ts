@@ -606,8 +606,8 @@ export const TID_V4_AUTODRAIN_TOGGLE = "v4-autodrain-toggle";
 export const TID_V4_FOLLOWUP_TOGGLE = "v4-followup-toggle";
 /** v4 会话标题显示（meta.title，空则显示占位） */
 export const TID_V4_SESSION_TITLE = "v4-session-title";
-/** 会话工具栏「生成标题」按钮。 */
-export const TID_V4_GENERATE_TITLE = "v4-generate-title";
+/** 侧边栏任务行内「生成标题」按钮（悬停显示，位于归档按钮左侧）。 */
+export const TID_TASK_GENERATE_TITLE = "task-generate-title";
 /** v4 会话重命名输入框（renameSession 命令） */
 export const TID_V4_RENAME_INPUT = "v4-rename-input";
 /** v4 会话重命名提交按钮（renameSession 命令） */

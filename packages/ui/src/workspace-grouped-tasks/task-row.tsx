@@ -3,9 +3,28 @@ import { memo, useState } from "react";
 import type { KeyboardEvent, MouseEvent } from "react";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import type { UniqueIdentifier } from "@dnd-kit/core";
-import { isCronTask, isOffPeakTask, type ZCodeTaskMeta } from "@zcode/shared";
-import { ArrowUpToLine, Clock, Cloud, Folder, ListTree, LoaderIcon, Moon, X } from "lucide-react";
+import {
+  TID_TASK_GENERATE_TITLE,
+  isCronTask,
+  isOffPeakTask,
+  testId,
+  type ZCodeTaskMeta,
+} from "@zcode/shared";
+import {
+  ArrowUpToLine,
+  Clock,
+  Cloud,
+  Folder,
+  ListTree,
+  LoaderCircle,
+  LoaderIcon,
+  Moon,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { cn } from "@/components/lib/utils.js";
+import { useOptionalServices } from "@/hooks/useServices.js";
+import { logger } from "@/logger.js";
 import { Badge } from "@/components/ui/badge.js";
 import { toast } from "@/components/ui/toast.js";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu.js";
@@ -239,6 +258,9 @@ function GroupedTaskRowComponent({
 
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
   const [taskRowHovered, setTaskRowHovered] = useState(false);
+  // 生成标题是模型调用（最长数十秒），行内给出进行中反馈，避免重复点击。
+  const [titleGenerating, setTitleGenerating] = useState(false);
+  const zcodeTaskService = useOptionalServices()?.zcodeTaskService ?? null;
   const [taskRowFocusWithin, setTaskRowFocusWithin] = useState(false);
   const [isHoverNone] = useState(
     () =>
@@ -445,6 +467,46 @@ function GroupedTaskRowComponent({
               >
                 <ArrowUpToLine className="size-3.5" />
               </TaskRowActionButton>
+              {zcodeTaskService && !remoteSessionId ? (
+                <TaskRowActionButton
+                  label={
+                    titleGenerating
+                      ? intl.formatMessage({ id: "taskList.generatingTitle" })
+                      : intl.formatMessage({ id: "taskList.generateTitle" })
+                  }
+                  showTooltip
+                  disabledReason={
+                    titleGenerating ? intl.formatMessage({ id: "taskList.generatingTitle" }) : undefined
+                  }
+                  testId={testId(TID_TASK_GENERATE_TITLE, task.taskId)}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setTitleGenerating(true);
+                    void zcodeTaskService
+                      .generateTaskTitle({
+                        taskId: task.taskId,
+                        workspacePath: task.workspacePath,
+                        ...(task.workspaceIdentity ? { workspaceIdentity: task.workspaceIdentity } : {}),
+                      })
+                      .catch((error: unknown) => {
+                        logger.warn("[GroupedTaskRow] 生成标题失败", {
+                          taskId: task.taskId,
+                          message: error instanceof Error ? error.message : String(error),
+                        });
+                      })
+                      .finally(() => {
+                        setTitleGenerating(false);
+                      });
+                  }}
+                >
+                  {titleGenerating ? (
+                    <LoaderCircle className="size-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="size-3.5" />
+                  )}
+                </TaskRowActionButton>
+              ) : null}
               <TaskRowActionButton
                 label={intl.formatMessage({ id: "common.close" })}
                 onClick={handleCloseTask}

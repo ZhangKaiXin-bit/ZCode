@@ -1,11 +1,10 @@
 import { memo } from "react";
 import {
-  TID_V4_GENERATE_TITLE,
   TID_V4_PANE_WORKSPACE_BADGE,
   TID_V4_SESSION_TITLE,
   TID_V4_SPLIT_CLOSE,
 } from "@zcode/shared";
-import { Loader2Icon, SparklesIcon, XIcon } from "lucide-react";
+import { XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { runUserAction } from "@/lib/userActionTelemetry.js";
@@ -31,10 +30,6 @@ interface ConversationHeaderProps {
   onClosePane?: () => void;
   /** 跨 workspace pane 的归属徽标（pane workspace ≠ shell 当前 workspace 时下发）。 */
   workspaceBadge?: PaneWorkspaceBadge;
-  /** 用模型重新生成会话标题（仅已持久化会话下发）。 */
-  onGenerateTitle?: () => void;
-  /** 标题生成进行中：按钮显示 spinner 并禁用。 */
-  generatingTitle?: boolean;
 }
 
 /**
@@ -45,12 +40,9 @@ function ConversationHeaderImpl({
   title,
   onClosePane,
   workspaceBadge,
-  onGenerateTitle,
-  generatingTitle = false,
 }: ConversationHeaderProps) {
   const { intl } = useZCodeIntl();
-  const hasFloatingActions =
-    Boolean(workspaceBadge) || Boolean(onClosePane) || Boolean(onGenerateTitle);
+  const hasFloatingActions = Boolean(workspaceBadge) || Boolean(onClosePane);
 
   return (
     <>
@@ -102,26 +94,6 @@ function ConversationHeaderImpl({
               <SquareSplitVerticalIcon className="size-4" />
             </Button>
           ) : null} */}
-          {onGenerateTitle ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="icon-md"
-              data-testid={TID_V4_GENERATE_TITLE}
-              disabled={generatingTitle}
-              onClick={onGenerateTitle}
-              title={intl.formatMessage({ id: "v4Pane.generateTitleTitle" })}
-              aria-label={intl.formatMessage({ id: "v4Pane.generateTitle" })}
-              aria-busy={generatingTitle}
-              className="pointer-events-auto bg-[var(--color-popover)] shadow-md"
-            >
-              {generatingTitle ? (
-                <Loader2Icon className="size-4 animate-spin" />
-              ) : (
-                <SparklesIcon className="size-4" />
-              )}
-            </Button>
-          ) : null}
           {onClosePane ? (
             <Button
               type="button"
