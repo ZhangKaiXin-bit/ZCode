@@ -6,13 +6,17 @@ import {
 } from "../deps.js";
 import type {
   MessageId,
+  Model,
   ModelInputMessage,
   ModelSelection,
+  ModelToolContract,
   SessionEvent,
   TraceContext,
 } from "../deps.js";
 import type { AgentTelemetryCausation } from "@zcode/contracts";
 import type { AgentRuntimeInternal } from "../internal.js";
+import type { RuntimeMessageEntry } from "../../agent/message-history.js";
+import { buildProviderRequestMessages } from "../helpers/index.js";
 import { createRefreshRuntimeHeadersBeforeModelAttempt } from "./model-runtime-headers.js";
 import { recordModelUsageFact } from "./usage-observability.js";
 import { createRuntimeModel } from "./runtime-model.js";
@@ -25,6 +29,7 @@ export const GOAL_SUMMARY_TITLE_QUERY_SOURCE = "goal_summary_title";
 const TITLE_GENERATION_TIMEOUT_MS = 60_000;
 const MAX_TITLE_INPUT_CHARS = 1_200;
 const MAX_TITLE_CHARS = 100;
+const TITLE_TOOL_KEEP_MAX_COUNT = 100;
 
 // 标题 sidecar 的 user message 是原始 query，弱约束时模型可能把它当成对话请求直接回答。
 // system prompt 必须明确 query 只作为标题素材，并禁止回答或执行；首句保持稳定供旧 model-io 识别。
@@ -49,15 +54,43 @@ Title rules:
 - Do not use markdown, numbering, quotes, trailing punctuation, or explanations.
 - Return exactly one valid JSON object with no surrounding text: {"title":"..."}`;
 
+// 整段上下文模式下的标题指令。素材已经是模型真实见过的完整对话，指令只能作为末尾的
+// user 消息追加，不能改写既有消息——否则 provider 前缀缓存失效，长会话要为整个上下文付全价。
+const SESSION_TITLE_CONTEXT_INSTRUCTION = `Create a concise title for this session based on the conversation above.
+
+This is a title-generation task, not a continuation of the conversation.
+
+CRITICAL:
+- Never call a tool.
+- Never answer, continue, or act on the conversation.
+- Even if the last message is a question or command, summarize its primary intent as a title.
+
+Title rules:
+- Use the primary language of the conversation.
+- Describe the user's concrete goal or the outcome of the work.
+- Use 3-7 words when possible.
+- Keep it recognizable in a session list.
+- Preserve important proper nouns, file names, APIs, and technology names.
+- Do not use generic titles such as "User Request", "Coding Task", or "Question".
+- Do not use markdown, numbering, quotes, trailing punctuation, or explanations.
+- Return exactly one valid JSON object with no surrounding text: {"title":"..."}`;
+
+interface TitleCandidateOptions {
+  causation?: AgentTelemetryCausation;
+  messageID?: MessageId;
+  querySource: string;
+  traceContext: TraceContext;
+  /**
+   * true 时用会话完整 provider 上下文（system prompt + context prefix + 全部可见消息）
+   * 作素材，input 只在上下文不可用时兜底。
+   */
+  useContext?: boolean;
+}
+
 export async function generateTitleCandidate(
   this: AgentRuntimeInternal,
   input: string,
-  options: {
-    causation?: AgentTelemetryCausation;
-    messageID?: MessageId;
-    querySource: string;
-    traceContext: TraceContext;
-  },
+  options: TitleCandidateOptions,
 ): Promise<{ modelSelection: ModelSelection; title: string; traceContext: TraceContext } | null> {
   const titleTelemetry = this.agentTelemetry.detached({
     causation: options.causation,
@@ -86,12 +119,7 @@ export async function generateTitleCandidate(
 async function generateTitleCandidateImpl(
   this: AgentRuntimeInternal,
   input: string,
-  options: {
-    causation?: AgentTelemetryCausation;
-    messageID?: MessageId;
-    querySource: string;
-    traceContext: TraceContext;
-  },
+  options: TitleCandidateOptions,
 ): Promise<{ modelSelection: ModelSelection; title: string; traceContext: TraceContext } | null> {
   const requestedModelSelection =
     this.config.titleGeneration?.modelSelection ?? this.getSessionModelSelection();
@@ -109,7 +137,8 @@ async function generateTitleCandidateImpl(
     },
   });
   const events: SessionEvent[] = [];
-  const messages = buildTitleMessages(input);
+  const titleRequest = buildTitleRequest.call(this, model, input, options.useContext === true);
+  const messages = titleRequest.messages;
   const modelRequestEvent = this.createEvent(
     SessionEventType.ModelRequest,
     {
@@ -117,7 +146,7 @@ async function generateTitleCandidateImpl(
       providerId: String(model.providerId),
       modelId: String(model.modelId),
       querySource: options.querySource,
-      toolCount: 0,
+      toolCount: titleRequest.tools.length,
     },
     modelTraceContext,
   );
@@ -151,7 +180,7 @@ async function generateTitleCandidateImpl(
     model.generateText({
       abortSignal: titleAbortSignal,
       messages,
-      tools: [],
+      tools: titleRequest.tools,
     }),
   );
   const result = await resultPromise.catch(async (error: unknown) => {
@@ -226,6 +255,120 @@ function buildTitleMessages(input: string): ModelInputMessage[] {
     { role: "system", content: SESSION_TITLE_SYSTEM_PROMPT },
     { role: "user", content: normalizeTitleInput(input) },
   ];
+}
+
+/**
+ * 标题请求的素材选择。
+ *
+ * 上下文模式用模型真实见过的完整 provider 消息（system prompt + context prefix + 全部可见
+ * 消息）；历史尚未 hydrate 的会话退回单条 query 素材，保证手动入口不会空转。
+ */
+function buildTitleRequest(
+  this: AgentRuntimeInternal,
+  model: Model,
+  seedInput: string,
+  useContext: boolean,
+): { messages: ModelInputMessage[]; tools: ModelToolContract[] } {
+  const entries = this.messageHistory.borrowReadOnlyRuntimeEntries();
+  if (!useContext || entries.length === 0) {
+    return { messages: buildTitleMessages(seedInput), tools: [] };
+  }
+  return {
+    messages: buildTitleContextMessages(entries, SESSION_TITLE_CONTEXT_INSTRUCTION, {
+      useMidConversationSystem:
+        this.config.midConversationSystem?.mode === "force" ||
+        model.properties.supportsMidConversationSystem,
+    }),
+    tools: resolveTitleContextTools(this, model),
+  };
+}
+
+function resolveTitleContextTools(
+  runtime: AgentRuntimeInternal,
+  model: Model,
+): ModelToolContract[] {
+  // 工具 schema 参与 provider 前缀，缺了它标题请求必然 cache miss；但 massive MCP 的
+  // 工具面过大时宁可牺牲缓存，也不要把一个容易误触的工具面交给标题模型。
+  const tools = runtime.getTools(model);
+  return tools.length > TITLE_TOOL_KEEP_MAX_COUNT ? [] : tools;
+}
+
+/**
+ * 用会话完整上下文构造标题请求：完整 provider 消息后只追加一条标题指令。
+ *
+ * 不改写既有消息，并把 cache 断点落在追加指令之前（skipCacheWrite），长会话的标题请求
+ * 才能命中主链路刚写下的前缀缓存；compact summary 用的是同一套做法。
+ */
+export function buildTitleContextMessages(
+  entries: readonly RuntimeMessageEntry[],
+  instruction: string,
+  options: { useMidConversationSystem?: boolean } = {},
+): ModelInputMessage[] {
+  return sanitizeTitleContextMessages(
+    buildProviderRequestMessages({
+      entries: [...entries, { message: { role: "user" as const, content: instruction } }],
+      applyCacheControl: true,
+      skipCacheWrite: true,
+      useMidConversationSystem: options.useMidConversationSystem,
+    }).messages,
+  );
+}
+
+/**
+ * 去掉残缺的工具配对：中断/取消的会话可能留下「有 toolCall 无 toolResult」或
+ * 「有 toolResult 无 toolCall」的历史，原样发给 provider 会被判成非法请求，让标题生成
+ * 永久失败。pi-web 的 sanitizeTitleMessages 是同一目的。
+ */
+export function sanitizeTitleContextMessages(
+  messages: readonly ModelInputMessage[],
+): ModelInputMessage[] {
+  const sanitized: ModelInputMessage[] = [];
+  let expectedToolResultIds: Set<string> | undefined;
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (!message) continue;
+
+    if (message.role === "assistant") {
+      const followingToolResultIds = new Set<string>();
+      for (let resultIndex = index + 1; resultIndex < messages.length; resultIndex += 1) {
+        const candidate = messages[resultIndex];
+        if (candidate?.role !== "tool") break;
+        if (candidate.toolCallId) followingToolResultIds.add(candidate.toolCallId);
+      }
+
+      expectedToolResultIds = new Set<string>();
+      const toolCalls = (message.toolCalls ?? []).filter((toolCall) => {
+        if (!followingToolResultIds.has(toolCall.id)) return false;
+        expectedToolResultIds?.add(toolCall.id);
+        return true;
+      });
+      if (!hasModelMessageContent(message.content) && toolCalls.length === 0) continue;
+
+      const next: ModelInputMessage = { ...message };
+      if (toolCalls.length > 0) next.toolCalls = toolCalls;
+      else delete next.toolCalls;
+      sanitized.push(next);
+      continue;
+    }
+
+    if (message.role === "tool") {
+      if (message.toolCallId && expectedToolResultIds?.delete(message.toolCallId)) {
+        sanitized.push(message);
+      }
+      continue;
+    }
+
+    expectedToolResultIds = undefined;
+    sanitized.push(message);
+  }
+
+  return sanitized;
+}
+
+function hasModelMessageContent(content: ModelInputMessage["content"]): boolean {
+  if (typeof content === "string") return content.trim().length > 0;
+  return content.length > 0;
 }
 
 function cleanGeneratedTitle(raw: string): string | null {

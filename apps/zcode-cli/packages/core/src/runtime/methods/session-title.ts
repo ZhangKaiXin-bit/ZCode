@@ -71,6 +71,50 @@ export function maybeStartSessionTitleGenerationFromExternalInput(
   });
 }
 
+/**
+ * 首轮 Turn 收尾后按模型真实见过的完整上下文重生成标题。
+ *
+ * 首条 query 的初版标题只保证会话在首轮执行期间就有名字；真正贴合会话内容的标题必须等
+ * 助手的回答落库后才能看到。这里刻意不复用 shouldAttemptSessionTitleGeneration：那条
+ * 路径带 turnNumber===0 与短输入下限的首轮约束，而「hi」这种短开场恰恰只有结合回答才能起名。
+ */
+export function maybeRegenerateSessionTitleFromContext(
+  this: AgentRuntimeInternal,
+  input: string,
+  traceContext: TraceContext,
+): boolean {
+  if (this.sessionContextTitleGenerationAttempted) return false;
+  if (this.config.titleGeneration?.enabled === false) return false;
+  if (!this.config.titleGeneration) return false;
+  if (!this.sessionStore) return false;
+  if (this.config.parentSessionId) return false;
+  if (this.config.taskType && this.config.taskType !== "interactive") return false;
+  if (this.messageHistory.borrowReadOnlyRuntimeEntries().length === 0) return false;
+  this.sessionContextTitleGenerationAttempted = true;
+
+  const generation = generateAndPersistSessionTitleFromContext
+    .call(this, input, traceContext)
+    .catch((error) => {
+      this.logger?.warn("Session title regeneration from context failed", {
+        ...traceContextToLogContext(traceContext),
+        errorMessage: error instanceof Error ? error.message : String(error),
+        event: "session_title_generation.context_failed",
+        module: "core.runtime",
+        status: "failed",
+      });
+    });
+  void this.trackResidencyBlockingWork(generation).catch((error) => {
+    this.logger?.warn("Session title context fallback persistence failed", {
+      ...traceContextToLogContext(traceContext),
+      errorMessage: error instanceof Error ? error.message : String(error),
+      event: "session_title_generation.context_fallback_failed",
+      module: "core.runtime",
+      status: "failed",
+    });
+  });
+  return true;
+}
+
 function maybeStartSessionTitleGenerationFromSeed(
   this: AgentRuntimeInternal,
   input: string,
@@ -124,6 +168,12 @@ function maybeStartSessionTitleGenerationFromSeed(
         });
       }
     });
+  // 首轮结束后要按完整上下文重生成标题；先记住初版请求的落地时机，避免两条
+  // "generated" 写回互相覆盖。这里吞掉 rejection，await 端只关心先后顺序。
+  this.sessionTitleGenerationPromise = generation.then(
+    () => {},
+    () => {},
+  );
   void this.trackResidencyBlockingWork(generation).catch((error) => {
     this.logger?.warn("Session title fallback persistence failed", {
       ...traceContextToLogContext(options.traceContext),
@@ -257,6 +307,46 @@ async function generateAndPersistSessionTitle(
   }
 }
 
+async function generateAndPersistSessionTitleFromContext(
+  this: AgentRuntimeInternal,
+  input: string,
+  traceContext: TraceContext,
+): Promise<void> {
+  // 初版标题请求可能还在飞；先等它落地，再写完整上下文的标题，
+  // 否则两条 titleSource="generated" 的写回会互相覆盖。
+  await this.sessionTitleGenerationPromise;
+
+  const session = await this.sessionStore?.getSession(this.sessionId);
+  if (!session || session.parentID || session.taskType !== "interactive") return;
+  if (
+    await shouldSkipGeneratedTitleForFirstQueryEdit.call(this, session, undefined, traceContext)
+  ) {
+    return;
+  }
+  if (session.titleSource === "custom") {
+    this.logger?.debug("Session title regeneration skipped", {
+      ...traceContextToLogContext(traceContext),
+      event: "session_title_generation.skipped",
+      module: "core.runtime",
+      reason: "custom_title",
+    });
+    return;
+  }
+
+  const generated = await generateTitleCandidate.call(this, input, {
+    querySource: SESSION_TITLE_QUERY_SOURCE,
+    traceContext,
+    useContext: true,
+  });
+  if (!generated) return;
+  await persistGeneratedSessionTitle.call(this, {
+    messageID: undefined,
+    modelSelection: generated.modelSelection,
+    title: generated.title,
+    traceContext: generated.traceContext,
+  });
+}
+
 /**
  * renameSession：用户显式重命名会话（titleSource=custom）。custom 之后自动标题
  * 生成会被跳过（见 persistGeneratedSessionTitle 的 custom_title 短路），持久化 + 发
@@ -290,8 +380,9 @@ export async function setCustomSessionTitle(
 /**
  * generateSessionTitle：会话工具栏「生成标题」的手动入口。
  *
- * 与自动标题共用同一个 sidecar（相同 system prompt / JSON 输出约束），素材取会话内首条
- * 可见用户消息——自动路径用的也是首条 query，保持一致，避免长会话把标题带偏到最后一轮杂事。
+ * 素材是模型真实见过的整段上下文（system prompt + context prefix + 全部可见消息），
+ * 而不是单条 query——长会话里首条 query 往往只是「继续」这类噪声，看完整对话才起得准。
+ * 历史尚未 hydrate 的会话退回首条可见用户消息兜底。
  * 这是用户显式动作，允许覆盖此前的 custom 标题（自动路径仍然跳过 custom）。
  */
 export async function regenerateSessionTitle(
@@ -311,6 +402,7 @@ export async function regenerateSessionTitle(
   const generated = await generateTitleCandidate.call(this, seed, {
     querySource: SESSION_TITLE_QUERY_SOURCE,
     traceContext: input.traceContext,
+    useContext: true,
   });
   if (!generated) return;
   await persistGeneratedSessionTitle.call(this, {

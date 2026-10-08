@@ -223,6 +223,8 @@ export class AgentRuntime {
   private pendingModelChangeTimeline?: PendingModelChangeTimeline;
   private sessionStartHookRan = false;
   private sessionTitleGenerationAttempted = false;
+  private sessionContextTitleGenerationAttempted = false;
+  private sessionTitleGenerationPromise: Promise<void> | null = null;
   private agentTelemetry: RuntimeTelemetryFacade;
 
   constructor(sessionId: SessionId, config: AgentRuntimeConfig, deps: AgentRuntimeDeps) {

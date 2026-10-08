@@ -13,12 +13,14 @@ import * as sidecar from "../src/runtime/methods/title-generation-sidecar.js";
 // 所以先注册桩、再动态导入被测模块；桩的行为由下面的可变状态驱动，各用例只改状态。
 let stubbedTitle: string | null = null;
 let capturedInputs: string[] = [];
+let capturedUseContext: Array<boolean | undefined> = [];
 
 mock.module("../src/runtime/methods/title-generation-sidecar.js", {
   exports: {
     ...sidecar,
-    generateTitleCandidate: async (input: string) => {
+    generateTitleCandidate: async (input: string, options?: { useContext?: boolean }) => {
       capturedInputs.push(input);
+      capturedUseContext.push(options?.useContext);
       return stubbedTitle === null
         ? null
         : {
@@ -113,9 +115,10 @@ function createRuntime(
 beforeEach(() => {
   stubbedTitle = null;
   capturedInputs = [];
+  capturedUseContext = [];
 });
 
-test("生成标题：用会话内首条可见用户消息作素材", async () => {
+test("生成标题：手动入口请求整段模型上下文", async () => {
   stubbedTitle = "重构缓存逻辑";
   const { runtime, updates, events } = createRuntime({
     messages: [
@@ -126,8 +129,10 @@ test("生成标题：用会话内首条可见用户消息作素材", async () =>
 
   await regenerateSessionTitle.call(runtime, { traceContext: TRACE_CONTEXT });
 
-  // 素材取首条而非末条：长会话不应把标题带偏到最后一轮杂事。
+  // 素材由 sidecar 从 messageHistory 的完整上下文构建；这里的 seed 只是历史缺失时的兜底，
+  // 仍取首条可见用户消息而不是末条。
   assert.deepEqual(capturedInputs, ["帮我重构缓存逻辑"]);
+  assert.deepEqual(capturedUseContext, [true]);
   assert.equal(updates.length, 1);
   assert.equal(updates[0]?.title, "重构缓存逻辑");
   assert.equal(updates[0]?.titleSource, "generated");

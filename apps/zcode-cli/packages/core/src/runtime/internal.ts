@@ -144,5 +144,8 @@ export interface AgentRuntimeInternal
   pendingModelChangeTimeline?: PendingModelChangeTimeline;
   sessionStartHookRan: boolean;
   sessionTitleGenerationAttempted: boolean;
+  sessionContextTitleGenerationAttempted: boolean;
+  /** 初版（首条 query）标题请求的落地时机；完整上下文重生成前必须先等它。 */
+  sessionTitleGenerationPromise: Promise<void> | null;
   agentTelemetry: RuntimeTelemetryFacade;
 }

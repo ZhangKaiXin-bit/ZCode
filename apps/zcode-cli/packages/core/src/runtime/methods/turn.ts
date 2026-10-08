@@ -48,6 +48,7 @@ import { enqueueCancellableRuntimeCommand } from "./runtime-command-submit.js";
 import { buildReferencedSessionContextReminderBody } from "../../session-context/read-session-context.js";
 import { runRegularTurnLoop } from "./turn-loop.js";
 import {
+  maybeRegenerateSessionTitleFromContext,
   maybeStartDeferredSessionTitleGeneration,
   maybeStartSessionTitleGeneration,
 } from "./session-title.js";
@@ -674,9 +675,25 @@ export async function executeTurnCommand(
           turnId,
           userMessageId,
         });
-        if (shouldRetryTitleGenerationAfterTurn && userMessageId) {
-          // 需要请求前刷新 provider runtime headers 的模型
-          // 若在主 turn 前生成标题，会先占用鉴权刷新窗口，导致真正的用户消息失败。
+        if (this.turnNumber === 0 && userMessageId) {
+          // 助手回答已经落库，标题可以从「首条 query」升级成模型真实见过的完整上下文。
+          // 先走到这里说明首轮 Turn 成功；初版标题只保证首轮执行期间会话有名字。
+          const contextTitleStarted = maybeRegenerateSessionTitleFromContext.call(
+            this,
+            displayInput,
+            turnTraceContext,
+          );
+          if (!contextTitleStarted && shouldRetryTitleGenerationAfterTurn) {
+            // 需要请求前刷新 provider runtime headers 的模型
+            // 若在主 turn 前生成标题，会先占用鉴权刷新窗口，导致真正的用户消息失败。
+            maybeStartDeferredSessionTitleGeneration.call(
+              this,
+              displayInput,
+              userMessageId,
+              turnTraceContext,
+            );
+          }
+        } else if (shouldRetryTitleGenerationAfterTurn && userMessageId) {
           maybeStartDeferredSessionTitleGeneration.call(
             this,
             displayInput,
